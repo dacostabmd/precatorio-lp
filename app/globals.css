@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #e9ebef;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+select {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+[data-chat-scroll]::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.text-wrap-pretty {
+  text-wrap: pretty;
+}
