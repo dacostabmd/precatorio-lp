@@ -836,11 +836,12 @@ export default class ChatSection extends React.Component<{}, State> {
       });
 
       if (!res.ok) {
-        throw new Error('Falha na resposta da API');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Falha na resposta da API');
       }
 
       const data = await res.json();
-      
+
       this.setState(
         (s) => ({
           messages: [
@@ -852,13 +853,17 @@ export default class ChatSection extends React.Component<{}, State> {
           this.startRevealLoop();
         }
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      const mensagem =
+        error?.message && error.message !== 'Falha na resposta da API'
+          ? error.message
+          : 'Desculpe, ocorreu um erro de conexão com a IA.';
       this.setState(
         (s) => ({
           messages: [
             ...s.messages.filter((m) => m.kind !== 'typing'),
-            aiText('Desculpe, ocorreu um erro de conexão com a IA.'),
+            aiText(mensagem),
           ],
         }),
         () => {

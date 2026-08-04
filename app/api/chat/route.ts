@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
 import {
-  getLangfuseCallback,
   analisarOficioComLangChain,
   prepararEntradaDocumento,
   ErroDocumentoIlegivel,
@@ -150,10 +149,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const sessionId = `session-${Date.now()}`;
-    const langfuseHandler = getLangfuseCallback(sessionId);
-    const callbacks = langfuseHandler ? [langfuseHandler] : [];
-
     // Se houver arquivo anexado (ex: imagem ou PDF em base64) ou se for uma solicitação explícita de cálculo
     if (fileBase64) {
       const validacao = validarArquivoUpload(fileBase64);
@@ -167,7 +162,7 @@ export async function POST(request: Request) {
       }
 
       const entrada = await prepararEntradaDocumento(validacao.buffer, validacao.mimeTypeReal);
-      const analise = await analisarOficioComLangChain(entrada, persona as Persona, sessionId);
+      const analise = await analisarOficioComLangChain(entrada, persona as Persona);
 
       if (bitrixDealId) {
         enviarQualificacaoAoBitrix(
@@ -199,7 +194,7 @@ export async function POST(request: Request) {
     // Foi removida: o chat conversacional abaixo já explica o cálculo em
     // linguagem simples, sem vazar regra comercial.
 
-    // Chat Conversacional via LangChain ChatOpenAI + LangFuse
+    // Chat Conversacional via LangChain ChatOpenAI
     const llm = new ChatOpenAI({
       modelName: 'gpt-4o-mini',
       temperature: 0.7,
@@ -228,7 +223,7 @@ Instruções:
       })),
     ];
 
-    const response = await llm.invoke(formattedMessages, { callbacks });
+    const response = await llm.invoke(formattedMessages);
 
     return NextResponse.json({
       text: response.content,

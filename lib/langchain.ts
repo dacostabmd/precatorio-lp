@@ -1,5 +1,4 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { CallbackHandler } from 'langfuse-langchain';
 import { PDFParse } from 'pdf-parse';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -553,27 +552,6 @@ export function avaliarPreferencia(
   return { temPreferencia: motivos.length > 0, idade, motivos };
 }
 
-/**
- * Cria o CallbackHandler do LangFuse para rastreamento de chamadas e métricas.
- */
-export function getLangfuseCallback(sessionId?: string, userId?: string) {
-  const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
-  const secretKey = process.env.LANGFUSE_SECRET_KEY;
-  const host = process.env.LANGFUSE_HOST || 'https://cloud.langfuse.com';
-
-  if (!publicKey || !secretKey) {
-    return undefined;
-  }
-
-  return new CallbackHandler({
-    publicKey,
-    secretKey,
-    baseUrl: host,
-    sessionId: sessionId || 'precatorio-lp-session',
-    userId: userId || 'anonymous',
-  });
-}
-
 const SYSTEM_PROMPT_EXTRACAO = `Você é um especialista jurídico-financeiro da Premium Office Precatório.
 Analise o ofício requisitório (texto ou imagem/documento) e extraia com exatidão todos os campos do formulário para o cálculo.
 
@@ -614,8 +592,7 @@ Regras importantes:
  */
 async function extrairCampos(
   entrada: EntradaAnalise,
-  apiKey: string,
-  callbacks: any[]
+  apiKey: string
 ): Promise<OficioExtraido> {
   const llm = new ChatOpenAI({
     modelName: entrada.tipo === 'imagem' ? 'gpt-4o' : 'gpt-4o-mini',
@@ -654,7 +631,7 @@ async function extrairCampos(
 
   let extraido: OficioExtraido;
   try {
-    extraido = (await structuredLlm.invoke(promptExtracao, { callbacks })) as OficioExtraido;
+    extraido = (await structuredLlm.invoke(promptExtracao)) as OficioExtraido;
   } catch (err) {
     // O `.catch(undefined)` no schema neutraliza a maioria dos valores fora do
     // tipo esperado, mas continua existindo um resíduo de erro de parsing do
@@ -689,8 +666,7 @@ function precisaFallbackVisao(validacao: ValidacaoExtracao): boolean {
  */
 export async function analisarOficioComLangChain(
   entrada: EntradaAnalise,
-  persona: Persona = 'autor',
-  sessionId?: string
+  persona: Persona = 'autor'
 ): Promise<{
   extraido: OficioExtraido;
   resultado: ResultadoCalculo;
@@ -710,11 +686,8 @@ export async function analisarOficioComLangChain(
     );
   }
 
-  const langfuseHandler = getLangfuseCallback(sessionId);
-  const callbacks = langfuseHandler ? [langfuseHandler] : [];
-
   // 1. Primeira tentativa pelo caminho escolhido em prepararEntradaDocumento.
-  let extraido = await extrairCampos(entrada, apiKey, callbacks);
+  let extraido = await extrairCampos(entrada, apiKey);
   let validacao = validarExtracao(extraido, entrada.tipo === 'texto' ? entrada.texto : undefined);
 
   // 2. Fallback texto -> visão. Um PDF escaneado pode ter uma camada de texto
@@ -725,7 +698,7 @@ export async function analisarOficioComLangChain(
     try {
       const paginas = await rasterizarPdf(entrada.pdfBuffer);
       const entradaVisao: EntradaAnalise = { tipo: 'imagem', paginas };
-      const extraidoVisao = await extrairCampos(entradaVisao, apiKey, callbacks);
+      const extraidoVisao = await extrairCampos(entradaVisao, apiKey);
       const validacaoVisao = validarExtracao(extraidoVisao, undefined);
 
       // Adota a visão se recuperou campos que faltavam, ou se o texto trazia
