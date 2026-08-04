@@ -62,6 +62,14 @@ const config: Config = {
           '0%, 80%, 100%': { opacity: '0.25' },
           '40%': { opacity: '1' },
         },
+        pulseDot: {
+          '0%, 100%': { opacity: '0.35', transform: 'scale(0.85)' },
+          '50%': { opacity: '1', transform: 'scale(1)' },
+        },
+        scanLine: {
+          '0%': { transform: 'translateY(-100%)' },
+          '100%': { transform: 'translateY(220%)' },
+        },
       },
       animation: {
         fadeUp: 'fadeUp 0.4s cubic-bezier(0.4,0,0.2,1)',
@@ -70,6 +78,8 @@ const config: Config = {
         barGrow: 'barGrow 0.7s cubic-bezier(0.4,0,0.2,1) 0.6s both',
         spin: 'spin 0.8s linear infinite',
         blink: 'blink 1.2s infinite',
+        pulseDot: 'pulseDot 1.4s ease-in-out infinite',
+        scanLine: 'scanLine 1.8s cubic-bezier(0.4,0,0.2,1) infinite',
       },
     },
   },

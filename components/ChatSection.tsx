@@ -12,12 +12,14 @@ import {
   REVIEWS,
   type Analise,
 } from '@/lib/data';
+import { Persona } from '@/lib/calculator';
 
 // ---------------------------------------------------------------------------
 // Message model
 // ---------------------------------------------------------------------------
 type Stage =
   | 'qualify'
+  | 'lead'
   | 'upload'
   | 'analyzing'
   | 'confirm'
@@ -43,9 +45,20 @@ const aiText = (text: string): any => ({
 const userText = (text: string, noAnim = false): any => ({ id: ++msgId, from: 'user', kind: 'text', text, noAnim });
 const aiTyping = (): any => ({ id: ++msgId, from: 'ai', kind: 'typing' });
 const aiCard = (kind: string, extra: any): any => ({ id: ++msgId, from: 'ai', kind, ...extra });
+const aiProcessing = (): any => ({ id: ++msgId, from: 'ai', kind: 'processing', stepIdx: 0 });
+
+// Rótulos exibidos no card de "processando" enquanto a API responde — puramente
+// cosméticos (não refletem chamadas reais além da requisição única ao /api/chat),
+// mas dão ao usuário a sensação de progresso real durante a espera.
+const PROCESSING_STEPS = [
+  'Lendo o documento enviado…',
+  'Extraindo dados do ofício…',
+  'Aplicando atualização monetária…',
+  'Calculando a proposta indicativa…',
+];
 
 const WELCOME =
-  'Olá! Sou a IA da Premium Office Precatório. Vou te ajudar a entender, com clareza e segurança, se faz sentido antecipar seu crédito. Para direcionar a análise, qual o seu perfil?';
+  'Olá! Sou a IA da Premium Office Precatório. Vou te ajudar a entender, com clareza e segurança, a avaliação do seu precatório. Para começar, me conta rapidamente qual é a sua relação com o crédito:';
 
 const ANALYSIS_STEPS = [
   {
@@ -54,17 +67,28 @@ const ANALYSIS_STEPS = [
   },
   {
     title: 'Análise da IA',
-    desc: 'Em segundos, a IA lê o ofício e extrai credor, tribunal, ente devedor, natureza e valores — uma triagem que levaria dias no processo manual.',
+    desc: 'Em segundos, a IA lê o ofício e extrai credor, tribunal, ente devedor, natureza e valores para calcular sua proposta com precisão.',
   },
   {
     title: 'Proposta indicativa',
-    desc: 'Com os dados confirmados, aplicamos as tabelas vigentes por esfera e LOA sobre o líquido real do seu crédito. Você vê a faixa de valores antes de falar com qualquer pessoa.',
+    desc: 'Com os dados confirmados, aplicamos as tabelas vigentes sobre o líquido real do seu crédito e apresentamos a faixa de valores da proposta.',
   },
   {
     title: 'Reunião com consultor',
     desc: 'Um especialista valida a análise juridicamente e apresenta a proposta oficial. Você decide com total clareza, no seu tempo — sem pressão e sem custo.',
   },
 ];
+
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_FILE_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+
+// A fórmula de atualização monetária vigente superestima o valor devido em ~2x
+// (juros de mora somados à SELIC + SELIC como taxa fixa) — ver CALCULO.md §3.
+// Até a metodologia por trecho entrar, a LP segue lendo o ofício, captando o
+// lead e anexando o documento ao Bitrix, mas NÃO exibe valores em reais ao
+// usuário: uma proposta inflada é pior que nenhuma proposta.
+// Reativar (junto com a nova fórmula validada) trocando para true.
+const EXIBIR_VALORES_CALCULADOS = false;
 
 const CHARS_PER_MS = 1 / 14;
 
@@ -101,6 +125,27 @@ const waNumber = '5521986450262';
 const waMessage = encodeURIComponent('Olá! Estou analisando meu precatório na Premium Office.');
 const whatsappLink = `https://wa.me/${waNumber}?text=${waMessage}`;
 
+const currencyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Anima um valor monetário de R$ 0 até `target` — usado nos cards de resultado
+// para dar a sensação de que o cálculo está "acontecendo" diante do usuário.
+function CountUpValue({ target, durationMs = 900 }: { target: number; durationMs?: number }) {
+  const [value, setValue] = React.useState(0);
+  React.useEffect(() => {
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setValue(target * eased);
+      if (progress < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, durationMs]);
+  return <span style={{ fontVariantNumeric: 'tabular-nums' }}>{currencyFormatter.format(value)}</span>;
+}
+
 interface State {
   stage: Stage;
   messages: any[];
@@ -110,6 +155,15 @@ interface State {
   quickAnalysis: Analise | null;
   flyingBubble: any | null;
   composerText: string;
+  persona: Persona;
+  leadNome: string;
+  leadCelular: string;
+  leadSubmitting: boolean;
+  leadError: string | null;
+  bitrixDealId: number | null;
+  pendingDocs: File[];
+  docsUploading: boolean;
+  docsError: string | null;
 }
 
 export default class ChatSection extends React.Component<{}, State> {
@@ -118,6 +172,7 @@ export default class ChatSection extends React.Component<{}, State> {
   quickDropRef = React.createRef<HTMLLabelElement>();
   revealRAF: number | null = null;
   revealLoopRunning = false;
+  processingTimer: ReturnType<typeof setInterval> | null = null;
 
   state: State = {
     stage: 'qualify',
@@ -128,6 +183,15 @@ export default class ChatSection extends React.Component<{}, State> {
     quickAnalysis: null,
     flyingBubble: null,
     composerText: '',
+    persona: 'autor',
+    leadNome: '',
+    leadCelular: '',
+    leadSubmitting: false,
+    leadError: null,
+    bitrixDealId: null,
+    pendingDocs: [],
+    docsUploading: false,
+    docsError: null,
   };
 
   componentDidMount() {
@@ -146,7 +210,26 @@ export default class ChatSection extends React.Component<{}, State> {
       this.revealRAF = null;
     }
     this.revealLoopRunning = false;
+    this.stopProcessingCycle();
   }
+
+  startProcessingCycle = () => {
+    this.stopProcessingCycle();
+    this.processingTimer = setInterval(() => {
+      this.setState((s) => ({
+        messages: s.messages.map((m) =>
+          m.kind === 'processing' ? { ...m, stepIdx: Math.min(m.stepIdx + 1, PROCESSING_STEPS.length - 1) } : m
+        ),
+      }));
+    }, 1400);
+  };
+
+  stopProcessingCycle = () => {
+    if (this.processingTimer) {
+      clearInterval(this.processingTimer);
+      this.processingTimer = null;
+    }
+  };
 
   startRevealLoop = () => {
     if (this.revealLoopRunning) return;
@@ -265,11 +348,15 @@ export default class ChatSection extends React.Component<{}, State> {
   onSelectTab = (tab: 'chat' | 'quick') => this.setState({ activeTab: tab });
 
   onSelectPerfil = (label: string) => {
+    let p: Persona = 'autor';
+    if (label.toLowerCase().includes('advogado')) p = 'advogado';
+    if (label.toLowerCase().includes('associado') || label.toLowerCase().includes('broker')) p = 'broker';
+
     this.pushMessages(
       userText(label, true),
-      aiText('Entendido. Agora, envie o ofício ou precatório em PDF para que eu possa extrair os dados principais.')
+      aiText('Perfeito! Para liberar sua calculadora personalizada, preciso só do seu nome completo e um número de celular para contato.')
     );
-    this.setState({ stage: 'upload' });
+    this.setState({ stage: 'lead', persona: p });
   };
 
   onSelectPerfilClick = (label: string, e: React.MouseEvent) => {
@@ -280,40 +367,257 @@ export default class ChatSection extends React.Component<{}, State> {
     });
   };
 
-  runAnalysis = (fileLabel: string) => {
-    this.pushMessages(userText(`Documento enviado: ${fileLabel}`, true), aiTyping());
+  runAnalysis = async (fileLabel: string, fileObj?: File) => {
+    this.pushMessages(userText(`Documento enviado: ${fileLabel}`, true), aiProcessing());
     this.setState({ stage: 'analyzing' });
-    setTimeout(() => {
-      const items = [
-        { label: 'Credor', value: MOCK_DOC.credor },
-        { label: 'CPF', value: MOCK_DOC.cpf },
-        { label: 'Nº do processo', value: MOCK_DOC.processo },
-        { label: 'Tribunal', value: MOCK_DOC.tribunal },
-        { label: 'Ente devedor', value: MOCK_DOC.devedor },
-        { label: 'Natureza', value: MOCK_DOC.natureza },
-        { label: 'Valor principal', value: formatBRL(MOCK_DOC.valorPrincipal) },
-        { label: 'Data-base', value: MOCK_DOC.dataBase },
-      ];
-      this.setState((s) => ({
-        messages: [
-          ...s.messages.filter((m) => m.kind !== 'typing'),
-          aiCard('extract-card', { items }),
-          aiText('Os dados acima conferem com o documento enviado?'),
-        ],
-        stage: 'confirm',
-      }));
-      this.startRevealLoop();
-    }, 2000);
+    this.startProcessingCycle();
+
+    try {
+      let fileBase64 = '';
+      let mimeType = 'text/plain';
+
+      if (fileObj) {
+        mimeType = fileObj.type || 'application/octet-stream';
+        const buffer = await fileObj.arrayBuffer();
+        fileBase64 = Buffer.from(buffer).toString('base64');
+      }
+
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: `Analise o documento ${fileLabel} para a persona ${this.state.persona}` }],
+          persona: this.state.persona,
+          fileBase64: fileBase64 || undefined,
+          mimeType: fileBase64 ? mimeType : undefined,
+          fileName: fileLabel,
+          bitrixDealId: this.state.bitrixDealId || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Erro na análise');
+      }
+
+      const data = await res.json();
+      this.stopProcessingCycle();
+
+      const validacao = data.validacao;
+      const extractItems = this.buildExtractItems(
+        data.extraido,
+        validacao,
+        data.preferencia,
+        data.mesesRra
+      );
+      const calcItems =
+        EXIBIR_VALORES_CALCULADOS && data.resultado ? this.buildCalcItems(data.resultado) : null;
+      const precisaConferir = !!validacao?.exigeConfirmacao;
+
+      const suspeitos: string[] = validacao?.camposSuspeitos || [];
+      const mensagemFinal = !EXIBIR_VALORES_CALCULADOS
+        ? 'Recebemos e registramos seu ofício com segurança. Os dados acima foram lidos diretamente do documento. A avaliação final é conferida por um dos nossos especialistas antes de ir para você — assim o valor que apresentamos é exato, e não uma estimativa automática. Um consultor entra em contato em breve com a proposta.'
+        : suspeitos.length
+          ? 'Atenção: alguns dados acima não pudemos confirmar diretamente no texto do documento (marcados como "conferir"). Antes de seguir, confirme se estão corretos — nosso consultor também valida isso com você.'
+          : !data.extraido?.credor
+            ? 'Não conseguimos identificar o nome do credor neste ofício — isso não impede a estimativa, mas nosso consultor vai confirmar esse dado com você.'
+            : 'Análise concluída! Veja acima os dados lidos do ofício e a proposta indicativa.';
+
+      this.setState(
+        (s) => ({
+          messages: [
+            ...s.messages.filter((m) => m.kind !== 'processing'),
+            ...(extractItems ? [aiCard('extract-card', { items: extractItems })] : []),
+            ...(calcItems
+              ? [aiCard('calc-card', { items: calcItems, animateIn: true, provisorio: precisaConferir })]
+              : []),
+            aiText(mensagemFinal),
+          ],
+          stage: 'decision',
+        }),
+        () => {
+          this.startRevealLoop();
+        }
+      );
+    } catch (err: any) {
+      console.error(err);
+      this.stopProcessingCycle();
+      const mensagem =
+        err?.message && err.message !== 'Erro na análise'
+          ? err.message
+          : 'Ocorreu um erro ao processar o documento com a IA. Tente novamente em instantes.';
+      this.setState(
+        (s) => ({
+          messages: [
+            ...s.messages.filter((m) => m.kind !== 'processing'),
+            aiText(mensagem),
+          ],
+          stage: 'upload',
+        }),
+        () => {
+          this.startRevealLoop();
+        }
+      );
+    }
+  };
+
+  // Cada linha carrega a ORIGEM do dado: 'lido' (extraído do documento),
+  // 'ausente' (não localizado) ou 'suspeito' (extraído mas não confirmado no
+  // texto-fonte). Sem isso o usuário não consegue distinguir leitura de
+  // suposição — foi exatamente o que gerou dados fantasma na tela.
+  buildExtractItems = (extraido: any, validacao?: any, preferencia?: any, mesesRra?: number) => {
+    if (!extraido) return null;
+    const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+    const faltando: string[] = validacao?.camposFaltando || [];
+    const suspeitos: string[] = validacao?.camposSuspeitos || [];
+    const assumidos: string[] = validacao?.camposAssumidos || [];
+
+    const statusDe = (campo: string) =>
+      suspeitos.includes(campo)
+        ? 'suspeito'
+        : faltando.includes(campo) || assumidos.includes(campo)
+          ? 'ausente'
+          : 'lido';
+
+    const itens: any[] = [
+      { label: 'Credor', value: extraido.credor || 'Não identificado no ofício', status: statusDe('credor') },
+      {
+        label: 'Ente devedor / Tribunal',
+        value: extraido.enteDevedor || extraido.tribunal || 'Não identificado no ofício',
+        status: extraido.enteDevedor || extraido.tribunal ? 'lido' : 'ausente',
+      },
+      {
+        label: 'Natureza / LOA',
+        value: `${extraido.natureza || 'Alimentar'} · LOA ${extraido.loa || '—'}`,
+        status: statusDe('natureza') === 'lido' && statusDe('loa') === 'lido' ? 'lido' : 'ausente',
+      },
+      {
+        label: 'Valor bruto original',
+        value: typeof extraido.brutoOriginal === 'number' ? formatter.format(extraido.brutoOriginal) : '—',
+        status: statusDe('brutoOriginal'),
+      },
+      {
+        label: 'Data-base',
+        value: extraido.dataBase || '—',
+        status: statusDe('dataBase'),
+      },
+    ];
+
+    if (typeof extraido.principalTributavel === 'number' && extraido.principalTributavel > 0) {
+      itens.push({
+        label: 'Valor principal',
+        value: formatter.format(extraido.principalTributavel),
+        status: 'lido',
+      });
+    }
+    if (typeof extraido.valorJuros === 'number' && extraido.valorJuros > 0) {
+      itens.push({ label: 'Valor juros', value: formatter.format(extraido.valorJuros), status: 'lido' });
+    }
+    if (typeof extraido.pssOriginal === 'number' && extraido.pssOriginal > 0) {
+      itens.push({
+        label: 'Desconto previdenciário',
+        value: formatter.format(extraido.pssOriginal),
+        status: 'lido',
+      });
+    }
+    if (mesesRra && mesesRra > 0) {
+      itens.push({ label: 'Período de competência', value: `${mesesRra} meses`, status: 'lido' });
+    }
+    // Preferência do art. 100, §2º, CF — vantagem concreta do credor, vale
+    // destacar no card mesmo antes de influenciar a tabela comercial.
+    if (preferencia?.temPreferencia) {
+      itens.push({
+        label: 'Preferência legal',
+        value: preferencia.motivos.join(', '),
+        status: 'destaque',
+      });
+    }
+
+    return itens;
+  };
+
+  buildCalcItems = (resultado: any) => {
+    const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+    return [
+      { label: 'Valor atualizado (juros + SELIC)', value: formatter.format(resultado.brutoAtualizado || 0), target: resultado.brutoAtualizado || 0 },
+      { label: 'Líquido final do credor', value: formatter.format(resultado.liquidoFinal || 0), target: resultado.liquidoFinal || 0 },
+      {
+        label: 'Faixa de proposta indicativa',
+        value: `${formatter.format(resultado.propostaInicial || 0)} a ${formatter.format(resultado.limiteInterno || 0)}`,
+      },
+    ];
   };
 
   onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
-    const label = `Documento enviado: ${file ? file.name : 'ofício.pdf'}`;
-    this.flyBubble(label, this.dropzoneRef.current, () => this.runAnalysis(file ? file.name : 'ofício.pdf'));
+    e.target.value = '';
+    if (!file) return;
+
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      this.pushMessages(aiText('Formato não suportado. Envie o ofício em PDF, JPG, PNG ou WEBP.'));
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      this.pushMessages(aiText('Arquivo muito grande. O tamanho máximo permitido é 10 MB.'));
+      return;
+    }
+
+    const label = file.name;
+    this.flyBubble(`Documento enviado: ${label}`, this.dropzoneRef.current, () => this.runAnalysis(label, file));
   };
-  onSimulateUpload = (e: React.MouseEvent) => {
-    const label = 'Documento enviado: oficio-exemplo.pdf';
-    this.flyBubble(label, e.currentTarget as HTMLElement, () => this.runAnalysis('oficio-exemplo.pdf'));
+
+  onLeadNomeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    this.setState({ leadNome: e.target.value, leadError: null });
+  };
+
+  onLeadCelularChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+    let formatted = digits;
+    if (digits.length > 2) formatted = `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+    if (digits.length > 7) {
+      formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+    }
+    this.setState({ leadCelular: formatted, leadError: null });
+  };
+
+  onLeadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nomeCompleto = this.state.leadNome.trim();
+    const celular = this.state.leadCelular.trim();
+
+    if (nomeCompleto.length < 3) {
+      this.setState({ leadError: 'Informe seu nome completo.' });
+      return;
+    }
+    if (celular.replace(/\D/g, '').length < 10) {
+      this.setState({ leadError: 'Informe um celular válido com DDD.' });
+      return;
+    }
+
+    this.setState({ leadSubmitting: true, leadError: null });
+
+    try {
+      const res = await fetch('/api/lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nomeCompleto, celular, persona: this.state.persona }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Não foi possível registrar seus dados.');
+      }
+
+      const data = await res.json().catch(() => ({}));
+
+      this.pushMessages(
+        userText(`${nomeCompleto} · ${celular}`, true),
+        aiText('Obrigado! Agora envie o arquivo do ofício (PDF/Imagem) para liberar sua análise personalizada.')
+      );
+      this.setState({ stage: 'upload', leadSubmitting: false, bitrixDealId: data.leadId || null });
+    } catch (err: any) {
+      this.setState({ leadSubmitting: false, leadError: err.message || 'Erro ao enviar seus dados. Tente novamente.' });
+    }
   };
 
   onCorrigirDados = (e: React.MouseEvent) => {
@@ -363,7 +667,6 @@ export default class ChatSection extends React.Component<{}, State> {
   onQuickFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     this.runQuickAnalysis();
   };
-  onQuickExample = () => this.runQuickAnalysis();
   onQuickReset = () => this.setState({ quickStage: 'idle', quickAnalysis: null });
 
   onAceitar = (e: React.MouseEvent) => {
@@ -373,14 +676,81 @@ export default class ChatSection extends React.Component<{}, State> {
     });
   };
 
-  onEnviarDocumentos = (e: React.MouseEvent) => {
-    this.flyBubble('Documentos enviados', e.currentTarget as HTMLElement, () => {
-      this.pushMessages(
-        userText('Documentos enviados', true),
-        aiText('Documentos recebidos! Vamos agendar uma reunião com um consultor especializado. Escolha um horário:')
+  onDocFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const aceitos: File[] = [];
+    const motivos: string[] = [];
+    for (const file of files) {
+      if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+        motivos.push(`${file.name}: formato não suportado`);
+        continue;
+      }
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        motivos.push(`${file.name}: maior que 10 MB`);
+        continue;
+      }
+      aceitos.push(file);
+    }
+
+    this.setState((s) => ({
+      pendingDocs: [...s.pendingDocs, ...aceitos],
+      docsError: motivos.length ? motivos.join(' · ') : null,
+    }));
+  };
+
+  onRemovePendingDoc = (index: number) => {
+    this.setState((s) => ({ pendingDocs: s.pendingDocs.filter((_, i) => i !== index) }));
+  };
+
+  onEnviarDocumentos = async (e: React.MouseEvent) => {
+    const arquivos = this.state.pendingDocs;
+    if (arquivos.length === 0) {
+      this.setState({ docsError: 'Selecione ao menos um documento antes de enviar.' });
+      return;
+    }
+
+    this.setState({ docsUploading: true, docsError: null });
+
+    try {
+      const arquivosBase64 = await Promise.all(
+        arquivos.map(async (file) => ({
+          fileName: file.name,
+          fileBase64: Buffer.from(await file.arrayBuffer()).toString('base64'),
+        }))
       );
-      this.setState({ stage: 'schedule' });
-    });
+
+      const res = await fetch('/api/documentos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bitrixDealId: this.state.bitrixDealId || undefined,
+          arquivos: arquivosBase64,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Não foi possível enviar os documentos.');
+      }
+
+      this.setState({ docsUploading: false, pendingDocs: [] });
+
+      this.flyBubble(`Documentos enviados (${arquivos.length})`, e.currentTarget as HTMLElement, () => {
+        this.pushMessages(
+          userText(`Documentos enviados (${arquivos.length})`, true),
+          aiText('Documentos recebidos! Vamos agendar uma reunião com um consultor especializado. Escolha um horário:')
+        );
+        this.setState({ stage: 'schedule' });
+      });
+    } catch (err: any) {
+      this.setState({
+        docsUploading: false,
+        docsError: err?.message || 'Erro ao enviar documentos. Tente novamente.',
+      });
+    }
   };
 
   onSelectSlot = (label: string, e: React.MouseEvent) => {
@@ -459,7 +829,10 @@ export default class ChatSection extends React.Component<{}, State> {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: historyForApi }),
+        body: JSON.stringify({
+          messages: historyForApi,
+          persona: this.state.persona,
+        }),
       });
 
       if (!res.ok) {
@@ -553,6 +926,68 @@ export default class ChatSection extends React.Component<{}, State> {
       );
     }
 
+    if (m.kind === 'processing') {
+      return (
+        <div key={m.id} style={wrapStyle}>
+          <Paper style={{ ...CARD_BUBBLE, position: 'relative', overflow: 'hidden' }}>
+            <div
+              className="animate-scanLine"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                top: 0,
+                height: '40%',
+                background: 'linear-gradient(180deg, rgba(13,31,56,0) 0%, rgba(13,31,56,0.06) 50%, rgba(13,31,56,0) 100%)',
+                pointerEvents: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', position: 'relative' }}>
+              <span
+                className="animate-pulseDot"
+                style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%', background: '#12805C', flexShrink: 0 }}
+              />
+              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0B1B33' }}>Analisando o ofício</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', position: 'relative' }}>
+              {PROCESSING_STEPS.map((step, i) => {
+                const isDone = i < m.stepIdx;
+                const isCurrent = i === m.stepIdx;
+                return (
+                  <div key={step} style={{ display: 'flex', alignItems: 'center', gap: '8px', opacity: isDone || isCurrent ? 1 : 0.35, transition: 'opacity 0.4s ease' }}>
+                    <span
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '16px',
+                        height: '16px',
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        fontSize: '10px',
+                        fontWeight: 800,
+                        color: isDone ? '#fff' : isCurrent ? '#0D1F38' : '#93A0B4',
+                        background: isDone ? '#12805C' : 'transparent',
+                        border: isDone ? 'none' : `1.5px solid ${isCurrent ? '#0D1F38' : '#DDE2EA'}`,
+                      }}
+                    >
+                      {isDone ? '✓' : ''}
+                    </span>
+                    <span
+                      className={isCurrent ? 'animate-pulseDot' : ''}
+                      style={{ fontSize: '12.5px', fontWeight: isCurrent ? 700 : 500, color: isCurrent ? '#0B1B33' : isDone ? '#3B4457' : '#93A0B4' }}
+                    >
+                      {step}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </Paper>
+        </div>
+      );
+    }
+
     if (m.kind === 'text' && m.from === 'user') {
       return (
         <div key={m.id} style={m.noAnim ? { ...wrapStyle, animation: 'none' } : wrapStyle}>
@@ -604,16 +1039,53 @@ export default class ChatSection extends React.Component<{}, State> {
     }
 
     if (m.kind === 'extract-card') {
+      const temRessalva = m.items.some(
+        (it: any) => it.status === 'ausente' || it.status === 'suspeito'
+      );
       return (
         <div key={m.id} style={wrapStyle}>
           <Paper style={CARD_BUBBLE}>
             <div style={{ fontWeight: 800, fontSize: '13px', color: '#0B1B33', marginBottom: '10px' }}>Dados extraídos do documento</div>
-            {m.items.map((item: any) => (
-              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '5px 0', fontSize: '13px', borderBottom: '1px solid #EEF1F5' }}>
-                <span style={{ color: '#5B6478' }}>{item.label}</span>
-                <span style={{ color: '#1C2331', fontWeight: 700, textAlign: 'right' }}>{item.value}</span>
-              </div>
-            ))}
+            {m.items.map((item: any) => {
+              const status = item.status || 'lido';
+              const cor =
+                status === 'suspeito'
+                  ? '#B4541E'
+                  : status === 'ausente'
+                    ? '#93A0B4'
+                    : status === 'destaque'
+                      ? '#0F6B4F'
+                      : '#1C2331';
+              return (
+                <div
+                  key={item.label}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '6px 0', fontSize: '13px', borderBottom: '1px solid #EEF1F5' }}
+                >
+                  <span style={{ color: '#5B6478', flexShrink: 0 }}>{item.label}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', textAlign: 'right' }}>
+                    <span style={{ color: cor, fontWeight: status === 'ausente' ? 500 : 700, fontStyle: status === 'ausente' ? 'italic' : 'normal' }}>
+                      {item.value}
+                    </span>
+                    {status === 'suspeito' && (
+                      <span style={{ flexShrink: 0, fontSize: '10px', fontWeight: 800, color: '#B4541E', background: '#FBEEE6', border: '1px solid #EBD3C2', borderRadius: '999px', padding: '1px 6px', whiteSpace: 'nowrap' }}>
+                        conferir
+                      </span>
+                    )}
+                    {status === 'destaque' && (
+                      <span style={{ flexShrink: 0, fontSize: '10px', fontWeight: 800, color: '#0F6B4F', background: '#E7F4EC', border: '1px solid #BFE0CC', borderRadius: '999px', padding: '1px 6px', whiteSpace: 'nowrap' }}>
+                        prioridade
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            {temRessalva && (
+              <p style={{ fontSize: '11.5px', color: '#8A94A8', margin: '10px 0 0', lineHeight: 1.5 }}>
+                Campos em cinza não constavam de forma legível no documento; os marcados como &ldquo;conferir&rdquo; não pudemos
+                confirmar no texto e precisam da sua validação.
+              </p>
+            )}
           </Paper>
         </div>
       );
@@ -623,11 +1095,24 @@ export default class ChatSection extends React.Component<{}, State> {
       return (
         <div key={m.id} style={wrapStyle}>
           <Paper style={CARD_BUBBLE}>
-            <div style={{ fontWeight: 800, fontSize: '13px', color: '#0B1B33', marginBottom: '12px' }}>Resultado da análise</div>
-            {m.items.map((item: any) => (
-              <div key={item.label} style={{ marginBottom: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0B1B33' }}>Resultado da análise</span>
+              {m.provisorio && (
+                <span style={{ fontSize: '10px', fontWeight: 800, color: '#B4541E', background: '#FBEEE6', border: '1px solid #EBD3C2', borderRadius: '999px', padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                  estimativa provisória
+                </span>
+              )}
+            </div>
+            {m.items.map((item: any, i: number) => (
+              <div
+                key={item.label}
+                className={m.animateIn ? 'animate-infoIn' : ''}
+                style={{ marginBottom: '10px', animationDelay: m.animateIn ? `${i * 0.12}s` : undefined }}
+              >
                 <div style={{ color: '#5B6478', fontSize: '12px', marginBottom: '2px' }}>{item.label}</div>
-                <div style={{ color: '#0B1B33', fontSize: '17px', fontWeight: 800 }}>{item.value}</div>
+                <div style={{ color: '#0B1B33', fontSize: '17px', fontWeight: 800 }}>
+                  {m.animateIn && typeof item.target === 'number' ? <CountUpValue target={item.target} /> : item.value}
+                </div>
               </div>
             ))}
             <p style={{ fontSize: '11.5px', color: '#93A0B4', margin: '8px 0 0', lineHeight: 1.5 }}>Valores indicativos, sujeitos a validação documental e jurídica.</p>
@@ -778,6 +1263,63 @@ export default class ChatSection extends React.Component<{}, State> {
         </div>
       );
     }
+    if (stage === 'lead') {
+      const { leadNome, leadCelular, leadSubmitting, leadError } = this.state;
+      return (
+        <form onSubmit={this.onLeadSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <input
+            type="text"
+            value={leadNome}
+            onChange={this.onLeadNomeChange}
+            placeholder="Nome completo"
+            autoComplete="name"
+            disabled={leadSubmitting}
+            style={{
+              border: '1.5px solid #DDE2EA',
+              borderRadius: '10px',
+              padding: '11px 14px',
+              fontSize: '13px',
+              fontFamily: 'inherit',
+              color: '#1C2331',
+              background: '#fff',
+              outline: 'none',
+            }}
+          />
+          <input
+            type="tel"
+            value={leadCelular}
+            onChange={this.onLeadCelularChange}
+            placeholder="Celular com DDD (ex: (21) 98765-4321)"
+            autoComplete="tel"
+            disabled={leadSubmitting}
+            style={{
+              border: '1.5px solid #DDE2EA',
+              borderRadius: '10px',
+              padding: '11px 14px',
+              fontSize: '13px',
+              fontFamily: 'inherit',
+              color: '#1C2331',
+              background: '#fff',
+              outline: 'none',
+            }}
+          />
+          {leadError && (
+            <div style={{ fontSize: '12px', color: '#C4392B', fontWeight: 600 }}>{leadError}</div>
+          )}
+          <Button
+            type="submit"
+            loading={leadSubmitting}
+            className="transition-colors duration-250 hover:!bg-[#F7F5F1] hover:!text-navy-accent"
+            style={{ height: 'auto', minHeight: '42px', width: '100%', padding: '12px', borderRadius: '10px', border: '1.5px solid #0D1F38', background: '#0D1F38', color: '#fff', fontWeight: 700, fontSize: '13px', lineHeight: 1.4 }}
+          >
+            Liberar minha calculadora
+          </Button>
+          <p style={{ fontSize: '11px', color: '#93A0B4', margin: 0, lineHeight: 1.5 }}>
+            Seus dados são usados apenas para contato sobre sua análise, conforme a LGPD.
+          </p>
+        </form>
+      );
+    }
     if (stage === 'upload') {
       return (
         <div>
@@ -786,13 +1328,6 @@ export default class ChatSection extends React.Component<{}, State> {
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#2B3346' }}>Enviar ofício / precatório (PDF)</div>
             <div style={{ fontSize: '12px', color: '#93A0B4', marginTop: '2px' }}>Clique para selecionar um arquivo</div>
           </label>
-          <Button
-            onClick={this.onSimulateUpload}
-            className="transition-colors duration-250 hover:!bg-[#12805C] hover:!text-[#DCEFE3]"
-            style={{ height: 'auto', minHeight: '42px', width: '100%', padding: '12px', borderRadius: '10px', border: 'none', background: '#DCEFE3', color: '#12805C', fontWeight: 700, fontSize: '12.5px', lineHeight: 1.4 }}
-          >
-            Usar ofício de exemplo para a demonstração
-          </Button>
         </div>
       );
     }
@@ -822,10 +1357,50 @@ export default class ChatSection extends React.Component<{}, State> {
       );
     }
     if (stage === 'documents') {
+      const { pendingDocs, docsUploading, docsError } = this.state;
       return (
-        <Button onClick={this.onEnviarDocumentos} className="transition-colors duration-250 hover:!bg-[#F7F5F1] hover:!text-navy-accent" style={{ height: 'auto', minHeight: '42px', width: '100%', padding: '13px', borderRadius: '10px', border: '1.5px solid #0D1F38', background: '#0D1F38', color: '#fff', fontWeight: 800, fontSize: '13px', lineHeight: 1.4 }}>
-          Enviar documentos (simulado)
-        </Button>
+        <div>
+          <label style={{ display: 'block', border: '1.5px dashed #A9D9BE', borderRadius: '14px', padding: '14px', textAlign: 'center', cursor: docsUploading ? 'not-allowed' : 'pointer', marginBottom: '10px', background: '#E9F6EF', opacity: docsUploading ? 0.6 : 1 }}>
+            <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={this.onDocFilesSelected} disabled={docsUploading} style={{ display: 'none' }} />
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#2B3346' }}>Enviar documentos (PDF ou imagem)</div>
+            <div style={{ fontSize: '12px', color: '#93A0B4', marginTop: '2px' }}>Clique para selecionar um ou mais arquivos</div>
+          </label>
+
+          {pendingDocs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
+              {pendingDocs.map((file, i) => (
+                <div key={`${file.name}-${i}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', borderRadius: '8px', border: '1px solid #EAEDF2', background: '#fff', fontSize: '12px', color: '#2B3346' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => this.onRemovePendingDoc(i)}
+                    disabled={docsUploading}
+                    style={{ border: 'none', background: 'none', color: '#93A0B4', cursor: 'pointer', fontWeight: 700, fontSize: '13px', flexShrink: 0 }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {docsError && (
+            <div style={{ fontSize: '11.5px', color: '#B4541E', marginBottom: '8px', lineHeight: 1.4 }}>{docsError}</div>
+          )}
+
+          <Button
+            onClick={this.onEnviarDocumentos}
+            disabled={docsUploading || pendingDocs.length === 0}
+            className="transition-colors duration-250 hover:!bg-[#F7F5F1] hover:!text-navy-accent"
+            style={{ height: 'auto', minHeight: '42px', width: '100%', padding: '13px', borderRadius: '10px', border: '1.5px solid #0D1F38', background: '#0D1F38', color: '#fff', fontWeight: 800, fontSize: '13px', lineHeight: 1.4, opacity: docsUploading || pendingDocs.length === 0 ? 0.6 : 1 }}
+          >
+            {docsUploading
+              ? 'Enviando…'
+              : pendingDocs.length > 0
+                ? `Enviar ${pendingDocs.length} documento${pendingDocs.length > 1 ? 's' : ''}`
+                : 'Selecione ao menos um documento'}
+          </Button>
+        </div>
       );
     }
     if (stage === 'schedule') {
@@ -969,51 +1544,29 @@ export default class ChatSection extends React.Component<{}, State> {
   render() {
     const { activeTab, stage } = this.state;
     const STAGE_STEP: Record<Stage, number> = {
-      qualify: 0, upload: 0, analyzing: 1, confirm: 1, calculating: 2, decision: 2, documents: 3, schedule: 3, done: 3, consultant: 3, revision: 3,
+      qualify: 0, lead: 0, upload: 0, analyzing: 1, confirm: 1, calculating: 2, decision: 2, documents: 3, schedule: 3, done: 3, consultant: 3, revision: 3,
     };
     const currentStepIdx = STAGE_STEP[stage] ?? 0;
 
     return (
       <section id="ia" data-screen-label="Chatbox IA" className="bg-mist px-5 py-10 sm:px-8 sm:py-14 md:px-16 md:py-24">
-        <div className="mx-auto flex max-w-[1480px] flex-wrap items-start gap-10">
-          {/* LEFT: progress */}
-          <div className="flex min-w-[260px] max-w-[320px] flex-[1_1_260px] flex-col self-stretch">
-            <div className="flex h-full flex-col rounded-[20px] border border-[#EAEDF2] bg-[#EEF0F3] p-6 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
-              <div className="mb-4.5 text-[12.5px] font-extrabold uppercase tracking-[0.05em] text-[#5B6478]">Progresso da análise</div>
-              <div className="flex flex-1 flex-col py-1">
-                {ANALYSIS_STEPS.map((step, i) => {
-                  const isLast = i === ANALYSIS_STEPS.length - 1;
-                  const isDone = i <= currentStepIdx;
-                  return (
-                    <div key={step.title} className={`relative ${isLast ? '' : 'flex-1 pb-5'}`}>
-                      {!isLast && <div className="pointer-events-none absolute bottom-0 left-[13px] top-[32px] w-[2px] bg-[#DDE2EA]" />}
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-extrabold" style={{ background: isDone ? '#0D1F38' : '#EEF0F3', color: isDone ? '#fff' : '#0B1B33', border: isDone ? 'none' : '1.5px solid #0B1B33' }}>
-                          {i + 1}
-                        </div>
-                        <span className="text-[13.5px] font-bold text-navy">{step.title}</span>
-                      </div>
-                      <p className="mb-0 mt-2 pl-10 text-xs leading-[1.65]" style={{ color: isDone ? '#3B4457' : '#8A94A8' }}>
-                        {step.desc}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* RIGHT: chat / quick */}
-          <div className="min-w-[340px] max-w-[760px] flex-[2_1_400px]">
+        <div className="mx-auto mb-10 max-w-[880px] text-center">
+          <h2 className="mb-3 text-[clamp(22px,3vw,32px)] font-extrabold leading-[1.25] tracking-[-0.01em] text-navy">
+            Use nossa calculadora com IA e descubra agora quanto você pode receber pelo seu precatório
+          </h2>
+          <p className="text-[15px] leading-[1.6] text-[#5B6478]">
+            Em poucos minutos, nossa Inteligência Artificial lê seu ofício, calcula a atualização do valor
+            e projeta quanto dinheiro pode cair na sua conta — sem compromisso e 100% gratuito.
+          </p>
+        </div>
+        <div className="mx-auto flex max-w-[1280px] flex-wrap items-start gap-8 lg:gap-10">
+          {/* LEFT: chat / quick */}
+          <div className="min-w-[340px] flex-1 max-w-[880px]">
             {activeTab === 'chat' && (
               <div>
                 <div className="animate-fadeUp overflow-hidden rounded-3xl border border-[#EAEDF2] bg-white shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
-                  <div className="flex items-center gap-2.5 border-b border-[#16233F] bg-navy px-5 py-4">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-navy-accent text-xs font-extrabold text-white">IA</div>
-                    <div>
-                      <div className="text-sm font-extrabold text-white">Assistente Premium Office</div>
-                      <div className="text-xs text-[#7C879C]">Análise de precatórios · online</div>
-                    </div>
+                  <div className="flex items-center justify-center border-b border-[#16233F] bg-navy px-5 py-3.5">
+                    <div className="text-sm font-extrabold text-white">Assistente de Cálculos Premium Office</div>
                   </div>
 
                   <div ref={this.chatRef} data-chat-scroll className="relative flex h-[600px] flex-col gap-4 overflow-y-auto bg-[#EEF0F3] p-6" style={{ scrollbarWidth: 'none' }}>
@@ -1049,9 +1602,6 @@ export default class ChatSection extends React.Component<{}, State> {
                         <div className="text-sm font-bold text-[#2B3346]">Enviar ofício / precatório (PDF)</div>
                         <div className="mt-0.5 text-[12.5px] text-[#93A0B4]">Clique para selecionar — a IA lê e calcula automaticamente</div>
                       </label>
-                      <button onClick={this.onQuickExample} className="w-full rounded-[10px] border-none bg-[#DCEFE3] px-3 py-3 text-[13px] font-bold text-[#12805C] transition-colors duration-250 hover:bg-[#12805C] hover:text-[#DCEFE3]">
-                        Usar ofício de exemplo para a demonstração
-                      </button>
                     </div>
                   )}
 
@@ -1068,35 +1618,30 @@ export default class ChatSection extends React.Component<{}, State> {
             )}
           </div>
 
-          {/* RIGHT: promotional banner & example card */}
-          <div className="hidden min-w-[280px] max-w-[360px] flex-[1.2_1_280px] self-stretch lg:flex flex-col items-center justify-start gap-6">
-            <img
-              src="/side_banner.png"
-              alt="Antecipe hoje seu precatório — receba sua proposta 100% online e segura"
-              className="w-full rounded-[20px] object-cover shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]"
-            />
-            
-            <div className="w-full rounded-[20px] border border-navy-border bg-navy-panel p-5 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
-              <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.06em] text-[#8A96AC]">
-                Exemplo de análise da IA
+          {/* RIGHT: progress */}
+          <div className="flex min-w-[260px] max-w-[320px] flex-[1_1_280px] flex-col self-stretch">
+            <div className="flex h-full flex-col rounded-[20px] border border-[#EAEDF2] bg-[#EEF0F3] p-6 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
+              <div className="mb-4.5 text-[12.5px] font-extrabold uppercase tracking-[0.05em] text-[#5B6478]">Progresso da análise</div>
+              <div className="flex flex-1 flex-col py-1">
+                {ANALYSIS_STEPS.map((step, i) => {
+                  const isLast = i === ANALYSIS_STEPS.length - 1;
+                  const isDone = i <= currentStepIdx;
+                  return (
+                    <div key={step.title} className={`relative ${isLast ? '' : 'flex-1 pb-5'}`}>
+                      {!isLast && <div className="pointer-events-none absolute bottom-0 left-[13px] top-[32px] w-[2px] bg-[#DDE2EA]" />}
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-extrabold" style={{ background: isDone ? '#0D1F38' : '#EEF0F3', color: isDone ? '#fff' : '#0B1B33', border: isDone ? 'none' : '1.5px solid #0B1B33' }}>
+                          {i + 1}
+                        </div>
+                        <span className="text-[13.5px] font-bold text-navy">{step.title}</span>
+                      </div>
+                      <p className="mb-0 mt-2 pl-10 text-xs leading-[1.65]" style={{ color: isDone ? '#3B4457' : '#8A94A8' }}>
+                        {step.desc}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="mb-3.5 flex gap-2.5">
-                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[#1A2947] text-[10px] font-extrabold text-sky">
-                  IA
-                </div>
-                <div className="rounded-xl rounded-tl-sm bg-navy-card px-3 py-2.5 text-[11.5px] leading-[1.5] text-[#C7CFDE]">
-                  Documento lido. Ente devedor: Estado de São Paulo · Natureza: Alimentar · Valor: R$ 480.000
-                </div>
-              </div>
-              <div className="mb-4.5 flex flex-row-reverse gap-2.5">
-                <div className="rounded-xl rounded-tr-sm bg-navy-accent px-3 py-2.5 text-[11.5px] font-semibold leading-[1.5] text-white">
-                  Confirmado, pode calcular.
-                </div>
-              </div>
-              <div className="mb-1 text-[clamp(18px,2vw,22px)] font-extrabold tracking-[-0.02em] text-white">
-                R$ 315.400 – R$ 356.200
-              </div>
-              <div className="text-[10px] font-bold text-sky">Proposta indicativa de antecipação</div>
             </div>
           </div>
         </div>

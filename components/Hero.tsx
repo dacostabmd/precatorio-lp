@@ -53,7 +53,7 @@ export default function Hero() {
           <div className="flex flex-col items-center justify-center gap-3.5 sm:flex-row">
             <a
               href="#ia"
-              className="rounded-full border border-[rgba(143,180,234,0.45)] bg-navy-accent px-7 py-4 text-base font-extrabold text-white no-underline shadow-[0_12px_32px_rgba(13,31,56,0.35)] transition-all duration-250 ease-out hover:-translate-y-px hover:border-[#F7F5F1] hover:bg-[#F7F5F1] hover:text-navy-accent hover:shadow-[0_16px_38px_rgba(13,31,56,0.45)]"
+              className="rounded-full border border-[#F7F5F1] bg-[#F7F5F1] px-7 py-4 text-base font-extrabold text-navy-accent no-underline shadow-[0_12px_32px_rgba(13,31,56,0.35)] transition-all duration-250 ease-out hover:-translate-y-px hover:border-[rgba(143,180,234,0.45)] hover:bg-navy-accent hover:text-white hover:shadow-[0_16px_38px_rgba(13,31,56,0.45)]"
             >
               Solicitar análise gratuita
             </a>
