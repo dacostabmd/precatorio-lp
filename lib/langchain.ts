@@ -1,15 +1,4 @@
 import { ChatOpenAI } from '@langchain/openai';
-import { PDFParse } from 'pdf-parse';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-
-// O PDF.js (usado internamente por pdf-parse) exige um worker script — em
-// runtime de servidor Next.js/Turbopack a resolução automática desse worker
-// falha, então apontamos explicitamente para o arquivo físico em disco (como
-// file:// URL — obrigatório no ESM loader do Node/Windows).
-PDFParse.setWorker(
-  pathToFileURL(path.join(process.cwd(), 'node_modules/pdf-parse/dist/worker/pdf.worker.mjs')).href
-);
 import { z } from 'zod';
 import {
   executarCalculoPrecatorio,
@@ -19,84 +8,33 @@ import {
 } from './calculator';
 import { obterFatorAtualizacao, DetalheAtualizacao, parseCompetencia } from './indices';
 
-// Abaixo deste tamanho de texto extraído, tratamos o PDF como "sem camada de
-// texto" (escaneado) — PDFs digitais reais de ofício têm centenas/milhares de
-// caracteres; ruído de metadados fica bem abaixo disso.
-const MIN_TEXTO_PDF_VALIDO = 40;
-
-// Páginas rasterizadas enviadas à visão. Ofícios requisitórios raramente passam
-// de 3 páginas; o teto limita custo e latência sem perder o conteúdo relevante.
-const MAX_PAGINAS_VISAO = 4;
-
-// Escala de renderização. Em 2x uma página A4 sai ~1190x1684 px, resolução
-// suficiente para o modelo ler valores monetários e nomes sem ambiguidade.
-const ESCALA_RASTERIZACAO = 2;
-
-export interface PaginaImagem {
-  base64: string;
-  mimeType: string;
-}
-
 export type EntradaAnalise =
-  // `pdfBuffer` é preservado no caminho de texto para permitir o fallback para
-  // visão quando a camada de texto existe mas não contém os dados do ofício
-  // (típico de scan com OCR pobre embutido).
-  | { tipo: 'texto'; texto: string; pdfBuffer?: Buffer }
-  | { tipo: 'imagem'; paginas: PaginaImagem[] };
+  | { tipo: 'pdf'; base64: string; fileName: string }
+  | { tipo: 'imagem'; base64: string; mimeType: string };
 
 /**
- * Renderiza as primeiras páginas do PDF como PNG.
+ * Empacota o documento do ofício para envio direto à OpenAI.
  *
- * Obrigatório para o caminho de visão: a API da OpenAI aceita apenas
- * PNG/JPEG/WEBP/GIF em `image_url` e rejeita `application/pdf` com
- * "Invalid MIME type" (HTTP 400) — enviar o PDF cru nunca funciona.
+ * Nada é extraído localmente: o PDF vai inteiro no content block `file` e o
+ * próprio modelo lê texto e layout de cada página. Isso substituiu o pipeline
+ * anterior com `pdf-parse` (extração de texto + rasterização das páginas para
+ * o caminho de visão), que dependia do PDF.js e quebrava em runtime
+ * serverless — o bundle arrastava código de canvas do navegador e derrubava
+ * TODA a rota /api/chat com `ReferenceError: DOMMatrix is not defined`, mesmo
+ * em mensagens de texto sem documento algum.
+ *
+ * Efeito colateral positivo: ofício escaneado e ofício digital seguem o mesmo
+ * caminho, sem heurística de "tem camada de texto?" nem fallback texto->visão.
  */
-async function rasterizarPdf(fileBuffer: Buffer): Promise<PaginaImagem[]> {
-  const parser = new PDFParse({ data: fileBuffer });
-  try {
-    const shot = await parser.getScreenshot({ scale: ESCALA_RASTERIZACAO });
-    return shot.pages.slice(0, MAX_PAGINAS_VISAO).map((p) => ({
-      base64: Buffer.from(p.data).toString('base64'),
-      mimeType: 'image/png',
-    }));
-  } finally {
-    await parser.destroy();
-  }
-}
-
-/**
- * Decide como o documento do ofício deve ser processado: tenta primeiro a
- * camada de texto real do PDF (rápido e barato, via gpt-4o-mini). Se o PDF
- * não tiver texto selecionável (ofício escaneado), rasteriza as páginas em PNG
- * para a visão computacional (gpt-4o) — sem depender de OCR local.
- */
-export async function prepararEntradaDocumento(
+export function prepararEntradaDocumento(
   fileBuffer: Buffer,
-  mimeType: string
-): Promise<EntradaAnalise> {
+  mimeType: string,
+  fileName: string
+): EntradaAnalise {
   if (mimeType === 'application/pdf') {
-    const parser = new PDFParse({ data: fileBuffer });
-    let texto = '';
-    try {
-      const textoResult = await parser.getText();
-      texto = (textoResult.text || '').trim();
-    } finally {
-      await parser.destroy();
-    }
-
-    if (texto.length >= MIN_TEXTO_PDF_VALIDO) {
-      return { tipo: 'texto', texto, pdfBuffer: fileBuffer };
-    }
-
-    // PDF escaneado — precisa virar imagem de verdade antes de ir à visão.
-    return { tipo: 'imagem', paginas: await rasterizarPdf(fileBuffer) };
+    return { tipo: 'pdf', base64: fileBuffer.toString('base64'), fileName };
   }
-
-  // Já é imagem (JPG/PNG/WEBP) — visão direta.
-  return {
-    tipo: 'imagem',
-    paginas: [{ base64: fileBuffer.toString('base64'), mimeType }],
-  };
+  return { tipo: 'imagem', base64: fileBuffer.toString('base64'), mimeType };
 }
 
 // Schema Zod para extração de dados do Ofício (OCR / Texto)
@@ -235,6 +173,30 @@ export const oficioExtractionSchema = z.object({
     .optional()
     .catch(undefined)
     .describe('true se o ofício indicar que o beneficiário é pessoa com deficiência.'),
+  // ATESTADO DE LEITURA — última linha de defesa contra dado fantasma.
+  //
+  // A conferência por ancoragem (validarExtracao + textoFonte) só funciona
+  // quando existe texto extraído localmente. Como o documento agora é lido
+  // inteiramente pelo modelo, não há texto-fonte para comparar, e sem esta
+  // declaração explícita o modelo preenche o formulário inteiro com dados
+  // plausíveis mesmo diante de uma página em branco — e a resposta sai como
+  // proposta financeira, sem nenhum aviso. Foi exatamente o que aconteceu em
+  // teste com um PNG totalmente branco: credor, CPF, processo, valor e data de
+  // nascimento inventados do zero.
+  documentoLegivel: z
+    .boolean()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'true SOMENTE se você conseguiu de fato LER conteúdo textual no documento. false se a página estiver em branco, borrada, vazia, escura, ilegível ou se não houver texto algum que você consiga decifrar.'
+    ),
+  ehOficioRequisitorio: z
+    .boolean()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'true SOMENTE se o documento for de fato um ofício requisitório / precatório / RPV. false para qualquer outro documento (foto aleatória, página em branco, contrato, RG, comprovante etc.).'
+    ),
 });
 
 export type OficioExtraido = z.infer<typeof oficioExtractionSchema>;
@@ -583,19 +545,35 @@ Regras importantes:
 - Campos booleanos declarados de forma negativa no documento devem vir como false, não vazios. Ex: "Portador de doença grave: Não" ⇒ portadorDoencaGrave=false; "Pessoa com deficiência: Não" ⇒ pessoaComDeficiencia=false.
 - Extraia valores monetários como número puro (1059599.54), sem "R$" nem separador de milhar.
 - Não preencha um campo por dedução ou semelhança: se o dado não está escrito no documento, deixe vazio.
-- Se a data-base for indicada em meses/anos passados, forneça no formato YYYY-MM.`;
+- Se a data-base for indicada em meses/anos passados, forneça no formato YYYY-MM.
+
+REGRA ABSOLUTA — NUNCA INVENTE DADOS:
+Os valores extraídos aqui viram uma proposta financeira em reais apresentada a
+uma pessoa real. Um dado inventado vira uma proposta falsa.
+- Se o documento estiver EM BRANCO, ilegível, borrado, vazio, ou não for um
+  ofício requisitório: preencha documentoLegivel=false e/ou
+  ehOficioRequisitorio=false e deixe TODOS os demais campos VAZIOS.
+- NUNCA gere nome de credor, CPF, número de processo, valor, data-base ou data
+  de nascimento "de exemplo", "plausível" ou "provável". Nomes como
+  "Maria Silva"/"João da Silva" e valores redondos como 150000 são exatamente o
+  tipo de invenção proibida aqui.
+- Preencher um campo que você não leu literalmente no documento é um erro grave
+  — muito pior do que deixá-lo vazio.
+- Só marque documentoLegivel=true se você realmente leu texto no documento.`;
 
 /**
- * Uma passada de extração estruturada sobre a entrada informada.
- * gpt-4o-mini para texto (rápido/barato); gpt-4o para imagens (leitura de
- * documento digitalizado).
+ * Uma passada de extração estruturada sobre o documento enviado.
+ *
+ * gpt-4o para ambos os formatos: o documento sempre é lido pelo modelo (não há
+ * mais extração de texto local), e a leitura de ofício exige acurácia de visão
+ * sobre valores monetários e nomes — onde o mini erra com frequência.
  */
 async function extrairCampos(
   entrada: EntradaAnalise,
   apiKey: string
 ): Promise<OficioExtraido> {
   const llm = new ChatOpenAI({
-    modelName: entrada.tipo === 'imagem' ? 'gpt-4o' : 'gpt-4o-mini',
+    modelName: 'gpt-4o',
     temperature: 0.1,
     openAIApiKey: apiKey,
   });
@@ -605,23 +583,33 @@ async function extrairCampos(
   // 100% dos campos em `required`, o que rejeitaria este schema com erro 400.
   const structuredLlm = llm.withStructuredOutput(oficioExtractionSchema, { method: 'functionCalling' });
 
+  const instrucao = {
+    type: 'text',
+    text: 'Leia este ofício requisitório e extraia os dados para o cálculo.',
+  };
+
+  // PDF vai inteiro no content block `file` — a OpenAI lê texto e layout de
+  // todas as páginas por conta própria. `image_url` NÃO aceita
+  // application/pdf (responde "Invalid MIME type", HTTP 400), por isso os dois
+  // formatos usam blocos diferentes.
   const userContent =
-    entrada.tipo === 'texto'
-      ? entrada.texto
-      : [
+    entrada.tipo === 'pdf'
+      ? [
+          instrucao,
           {
-            type: 'text',
-            text:
-              entrada.paginas.length > 1
-                ? `Leia este ofício requisitório (${entrada.paginas.length} páginas em imagem) e extraia os dados para o cálculo.`
-                : 'Leia este ofício requisitório (imagem/documento) e extraia os dados para o cálculo.',
+            type: 'file',
+            file: {
+              filename: entrada.fileName,
+              file_data: `data:application/pdf;base64,${entrada.base64}`,
+            },
           },
-          // Uma entrada image_url por página — a OpenAI aceita apenas formatos
-          // de imagem aqui, por isso as páginas já vêm rasterizadas em PNG.
-          ...entrada.paginas.map((pagina) => ({
+        ]
+      : [
+          instrucao,
+          {
             type: 'image_url',
-            image_url: { url: `data:${pagina.mimeType};base64,${pagina.base64}` },
-          })),
+            image_url: { url: `data:${entrada.mimeType};base64,${entrada.base64}` },
+          },
         ];
 
   const promptExtracao = [
@@ -649,20 +637,9 @@ async function extrairCampos(
 }
 
 /**
- * true quando o resultado do caminho de texto é ruim o bastante para valer uma
- * segunda tentativa por visão: faltando qualquer campo essencial, ou com valor
- * que não se ancora no texto-fonte (sinal de que o texto extraído não
- * corresponde ao que está impresso na página).
- */
-function precisaFallbackVisao(validacao: ValidacaoExtracao): boolean {
-  return validacao.camposFaltando.length > 0 || validacao.camposSuspeitos.length > 0;
-}
-
-/**
- * Processa a extração dos dados do ofício e roda a calculadora em 8 etapas com a persona selecionada.
- * Fluxo híbrido: entrada `texto` (PDF com camada de texto real) usa gpt-4o-mini
- * (mais rápido e barato); entrada `imagem` (PDF escaneado ou foto do ofício)
- * usa gpt-4o com visão computacional, sem depender de OCR local.
+ * Processa a extração dos dados do ofício e roda a calculadora em 8 etapas com
+ * a persona selecionada. O documento (PDF ou imagem) é lido inteiramente pela
+ * OpenAI — não há extração local de texto nem rasterização de páginas.
  */
 export async function analisarOficioComLangChain(
   entrada: EntradaAnalise,
@@ -680,43 +657,33 @@ export async function analisarOficioComLangChain(
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY não configurada no ambiente.');
   }
-  if (entrada.tipo === 'texto' && entrada.texto.trim().length < MIN_TEXTO_PDF_VALIDO) {
+  // 1. Extração estruturada — a OpenAI lê o documento diretamente.
+  //
+  // NOTA: `validarExtracao` recebe o texto-fonte apenas quando ele existe
+  // localmente, para checar se o valor extraído realmente aparece no documento
+  // (detecção de alucinação — ver camposSuspeitos). Como a leitura agora é
+  // 100% do modelo, não há texto local para ancorar, e essa checagem fica
+  // inativa. Os demais controles (campos faltando, campos assumidos,
+  // consistência Principal+Juros vs. bruto) continuam valendo.
+  const extraido = await extrairCampos(entrada, apiKey);
+
+  // 2. Atestado de leitura do próprio modelo. Precisa vir ANTES de qualquer
+  // cálculo: sem ancoragem em texto-fonte, esta é a única barreira entre uma
+  // página em branco e uma proposta em reais construída sobre dados
+  // inventados. Só bloqueia com `=== false` (negativa explícita) — campo
+  // ausente cai nas checagens de campos essenciais logo abaixo.
+  if (extraido.documentoLegivel === false) {
     throw new ErroDocumentoIlegivel(
-      'Não foi possível ler o conteúdo do documento. Envie um PDF ou imagem mais nítida do ofício.'
+      'Não conseguimos ler o conteúdo deste arquivo. Envie o PDF original do ofício ou uma foto nítida, bem enquadrada e com boa iluminação.'
+    );
+  }
+  if (extraido.ehOficioRequisitorio === false) {
+    throw new ErroDocumentoIlegivel(
+      'O arquivo enviado não parece ser um ofício requisitório (precatório/RPV). Envie a página do ofício que traz o valor bruto e a data-base do cálculo.'
     );
   }
 
-  // 1. Primeira tentativa pelo caminho escolhido em prepararEntradaDocumento.
-  let extraido = await extrairCampos(entrada, apiKey);
-  let validacao = validarExtracao(extraido, entrada.tipo === 'texto' ? entrada.texto : undefined);
-
-  // 2. Fallback texto -> visão. Um PDF escaneado pode ter uma camada de texto
-  // esparsa (OCR pobre do próprio digitalizador) que passa o limite mínimo mas
-  // não contém os dados do ofício. Nesse caso o texto é inútil e a página
-  // renderizada é a única fonte real — rasteriza e tenta de novo com visão.
-  if (entrada.tipo === 'texto' && entrada.pdfBuffer && precisaFallbackVisao(validacao)) {
-    try {
-      const paginas = await rasterizarPdf(entrada.pdfBuffer);
-      const entradaVisao: EntradaAnalise = { tipo: 'imagem', paginas };
-      const extraidoVisao = await extrairCampos(entradaVisao, apiKey);
-      const validacaoVisao = validarExtracao(extraidoVisao, undefined);
-
-      // Adota a visão se recuperou campos que faltavam, ou se o texto trazia
-      // valor não ancorado (alucinação) e a visão não regrediu — nesse caso a
-      // página renderizada é a fonte mais confiável das duas.
-      const recuperouCampos = validacaoVisao.camposFaltando.length < validacao.camposFaltando.length;
-      const substituiSuspeita =
-        validacao.camposSuspeitos.length > 0 &&
-        validacaoVisao.camposFaltando.length <= validacao.camposFaltando.length;
-
-      if (recuperouCampos || substituiSuspeita) {
-        extraido = extraidoVisao;
-        validacao = validacaoVisao;
-      }
-    } catch (err) {
-      console.warn('[analise] Fallback para visão falhou:', err);
-    }
-  }
+  const validacao = validarExtracao(extraido);
 
   // 3. Sem valor bruto ou sem data-base não existe cálculo honesto a apresentar
   // — qualquer número aqui seria ficção com aparência de proposta formal.

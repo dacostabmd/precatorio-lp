@@ -161,7 +161,11 @@ export async function POST(request: Request) {
         anexarArquivoAoLeadBitrix(bitrixDealId, fileNameSeguro, fileBase64);
       }
 
-      const entrada = await prepararEntradaDocumento(validacao.buffer, validacao.mimeTypeReal);
+      const entrada = prepararEntradaDocumento(
+        validacao.buffer,
+        validacao.mimeTypeReal,
+        fileNameSeguro
+      );
       const analise = await analisarOficioComLangChain(entrada, persona as Persona);
 
       if (bitrixDealId) {
