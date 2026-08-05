@@ -1571,7 +1571,7 @@ export default class ChatSection extends React.Component<{}, State> {
               <div>
                 <div className="animate-fadeUp overflow-hidden rounded-3xl border border-[#EAEDF2] bg-white shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
                   <div className="flex items-center justify-center border-b border-[#16233F] bg-navy px-5 py-3.5">
-                    <div className="text-sm font-extrabold text-white">Assistente de Cálculos Premium Office</div>
+                    <div className="text-sm font-extrabold text-white">Calculadora Assistente de Cálculos Premium Office</div>
                   </div>
 
                   <div ref={this.chatRef} data-chat-scroll className="relative flex h-[600px] flex-col gap-4 overflow-y-auto bg-[#EEF0F3] p-6" style={{ scrollbarWidth: 'none' }}>
