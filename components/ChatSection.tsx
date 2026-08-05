@@ -169,6 +169,11 @@ interface State {
 export interface ChatSectionProps {
   embedOnly?: boolean;
   transparent?: boolean;
+  fontSize?: string;
+  textSize?: string;
+  btnSize?: string;
+  buttonSize?: string;
+  scale?: string;
 }
 
 export default class ChatSection extends React.Component<ChatSectionProps, State> {
@@ -1556,13 +1561,101 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     const isTransparent = Boolean(this.props.transparent);
     const isEmbedOnly = Boolean(this.props.embedOnly);
 
+    const fontSizeProp = this.props.fontSize || this.props.textSize;
+    const btnSizeProp = this.props.btnSize || this.props.buttonSize;
+    const scaleProp = this.props.scale;
+
+    let cardFontSize: string | undefined = undefined;
+    if (fontSizeProp) {
+      const fontMap: Record<string, string> = {
+        xs: '12px',
+        sm: '13.5px',
+        md: '15px',
+        lg: '17px',
+        xl: '19px',
+        '2xl': '21px',
+      };
+      const key = fontSizeProp.toLowerCase();
+      cardFontSize = fontMap[key] || (/\d/.test(fontSizeProp) ? fontSizeProp : undefined);
+      if (cardFontSize && !cardFontSize.endsWith('px') && !cardFontSize.endsWith('rem') && !cardFontSize.endsWith('%') && !cardFontSize.endsWith('em')) {
+        cardFontSize = `${cardFontSize}px`;
+      }
+    }
+
+    let btnMinHeight: string | undefined = undefined;
+    let btnPadding: string | undefined = undefined;
+    let btnFontSize: string | undefined = undefined;
+    if (btnSizeProp) {
+      const b = btnSizeProp.toLowerCase();
+      if (b === 'xs') {
+        btnMinHeight = '32px';
+        btnPadding = '6px 10px';
+        btnFontSize = '11px';
+      } else if (b === 'sm') {
+        btnMinHeight = '38px';
+        btnPadding = '8px 14px';
+        btnFontSize = '12px';
+      } else if (b === 'md') {
+        btnMinHeight = '44px';
+        btnPadding = '12px 16px';
+        btnFontSize = '14px';
+      } else if (b === 'lg') {
+        btnMinHeight = '52px';
+        btnPadding = '14px 22px';
+        btnFontSize = '16px';
+      } else if (b === 'xl') {
+        btnMinHeight = '60px';
+        btnPadding = '18px 28px';
+        btnFontSize = '18px';
+      }
+    }
+
+    let cardTransform: string | undefined = undefined;
+    if (scaleProp) {
+      const num = parseFloat(scaleProp);
+      if (!isNaN(num) && num > 0.4 && num < 2.5) {
+        cardTransform = `scale(${num})`;
+      }
+    }
+
+    const hasCustomStyles = cardFontSize || btnMinHeight || btnPadding || btnFontSize || cardTransform;
+
     const STAGE_STEP: Record<Stage, number> = {
       qualify: 0, lead: 0, upload: 0, analyzing: 1, confirm: 1, calculating: 2, decision: 2, documents: 3, schedule: 3, done: 3, consultant: 3, revision: 3,
     };
     const currentStepIdx = STAGE_STEP[stage] ?? 0;
 
     const chatCard = (
-      <div className={`animate-fadeUp flex flex-col w-full ${isEmbedOnly ? 'h-full min-h-0' : ''} overflow-hidden rounded-2xl sm:rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
+      <div className={`chat-embed-custom animate-fadeUp flex flex-col w-full ${isEmbedOnly ? 'h-full min-h-0' : ''} overflow-hidden rounded-2xl sm:rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
+        {hasCustomStyles && (
+          <style>{`
+            ${cardFontSize ? `
+            .chat-embed-custom,
+            .chat-embed-custom p,
+            .chat-embed-custom input,
+            .chat-embed-custom span,
+            .chat-embed-custom label,
+            .chat-embed-custom textarea {
+              font-size: ${cardFontSize} !important;
+            }
+            ` : ''}
+            ${btnFontSize || btnMinHeight || btnPadding ? `
+            .chat-embed-custom button,
+            .chat-embed-custom .mantine-Button-root,
+            .chat-embed-custom a.mantine-Button-root {
+              ${btnFontSize ? `font-size: ${btnFontSize} !important;` : ''}
+              ${btnMinHeight ? `min-height: ${btnMinHeight} !important; height: auto !important;` : ''}
+              ${btnPadding ? `padding: ${btnPadding} !important;` : ''}
+            }
+            ` : ''}
+            ${cardTransform ? `
+            .chat-embed-custom {
+              transform: ${cardTransform};
+              transform-origin: top center;
+            }
+            ` : ''}
+          `}</style>
+        )}
         <div className="flex flex-shrink-0 items-center justify-center border-b border-[#16233F] bg-navy px-4 py-3 sm:px-5 sm:py-3.5">
           <div className="text-xs sm:text-sm font-extrabold text-white text-center">Calculadora Assistente de Cálculos Premium Office</div>
         </div>
