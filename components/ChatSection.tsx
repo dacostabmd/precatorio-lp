@@ -1562,18 +1562,18 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     const currentStepIdx = STAGE_STEP[stage] ?? 0;
 
     const chatCard = (
-      <div className={`animate-fadeUp overflow-hidden rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
-        <div className="flex items-center justify-center border-b border-[#16233F] bg-navy px-5 py-3.5">
-          <div className="text-sm font-extrabold text-white">Calculadora Assistente de Cálculos Premium Office</div>
+      <div className={`animate-fadeUp flex flex-col w-full ${isEmbedOnly ? 'h-full min-h-0' : ''} overflow-hidden rounded-2xl sm:rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
+        <div className="flex flex-shrink-0 items-center justify-center border-b border-[#16233F] bg-navy px-4 py-3 sm:px-5 sm:py-3.5">
+          <div className="text-xs sm:text-sm font-extrabold text-white text-center">Calculadora Assistente de Cálculos Premium Office</div>
         </div>
 
-        <div ref={this.chatRef} data-chat-scroll className={`relative flex h-[600px] flex-col gap-4 overflow-y-auto ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} p-6`} style={{ scrollbarWidth: 'none' }}>
+        <div ref={this.chatRef} data-chat-scroll className={`relative flex ${isEmbedOnly ? 'flex-1 min-h-0 h-full' : 'h-[500px] sm:h-[600px]'} flex-col gap-4 overflow-y-auto ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} p-4 sm:p-6`} style={{ scrollbarWidth: 'none' }}>
           <img src="/chat-watermark.png" alt="" className="pointer-events-none absolute left-1/2 top-1/2 z-0 w-[65%] max-w-[260px] -translate-x-1/2 -translate-y-1/2 opacity-50" />
           {this.renderFlyingBubble()}
           {this.state.messages.map((m) => this.renderMessage(m))}
         </div>
 
-        <div className={`border-t border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} px-5 py-4.5`}>
+        <div className={`flex-shrink-0 border-t border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} px-4 py-3.5 sm:px-5 sm:py-4.5`}>
           {this.renderChatInput()}
           {this.renderComposer()}
         </div>

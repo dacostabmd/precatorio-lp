@@ -18,8 +18,8 @@ export default async function EmbedPage({ searchParams }: PageProps) {
   const isTransparent = params.transparent === 'true' || params.transparent === '1' || params.bg === 'transparent';
 
   return (
-    <main className="min-h-screen flex items-center justify-center p-0 bg-transparent">
-      <div className="w-full max-w-[880px] mx-auto">
+    <main className="h-screen w-full flex flex-col items-center justify-center p-2 sm:p-4 bg-transparent overflow-hidden">
+      <div className="w-full h-full flex flex-col flex-1 min-h-0 max-w-[880px] mx-auto">
         <ChatSection embedOnly={true} transparent={isTransparent} />
       </div>
     </main>
