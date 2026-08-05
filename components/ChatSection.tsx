@@ -1585,32 +1585,32 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     }
 
     return (
-      <section id="ia" data-screen-label="Chatbox IA" className="bg-mist px-5 py-10 sm:px-8 sm:py-14 md:px-16 md:py-24">
-        <div className="mx-auto mb-10 max-w-[880px] text-center">
-          <h2 className="mb-3 text-[clamp(22px,3vw,32px)] font-extrabold leading-[1.25] tracking-[-0.01em] text-navy">
+      <section id="ia" data-screen-label="Chatbox IA" className="bg-mist px-4 py-10 sm:px-6 sm:py-14 md:px-16 md:py-24">
+        <div className="mx-auto mb-8 sm:mb-10 max-w-[880px] text-center">
+          <h2 className="mb-3 text-2xl sm:text-3xl md:text-4xl font-extrabold leading-[1.25] tracking-[-0.01em] text-navy">
             Use nossa calculadora com IA e descubra agora quanto você pode receber pelo seu precatório
           </h2>
-          <p className="text-[15px] leading-[1.6] text-[#5B6478]">
+          <p className="text-sm sm:text-[15px] leading-[1.6] text-[#5B6478]">
             Em poucos minutos, nossa Inteligência Artificial lê seu ofício, calcula a atualização do valor
             e projeta quanto dinheiro pode cair na sua conta — sem compromisso e 100% gratuito.
           </p>
         </div>
-        <div className="mx-auto flex max-w-[1280px] flex-wrap items-start gap-8 lg:gap-10">
+        <div className="mx-auto flex max-w-[1280px] flex-col items-center gap-8 lg:flex-row lg:items-start lg:gap-10">
           {/* LEFT: chat / quick */}
-          <div className="min-w-[340px] flex-1 max-w-[880px]">
+          <div className="w-full min-w-0 max-w-[880px] flex-1">
             {activeTab === 'chat' && chatCard}
 
             {activeTab === 'quick' && (
               <div>
-                <p className="mb-4 text-center text-base text-[#5B6478]">Envie o ofício e a IA lê o documento, aplica o cálculo e apresenta a estimativa.</p>
+                <p className="mb-4 text-center text-sm sm:text-base text-[#5B6478]">Envie o ofício e a IA lê o documento, aplica o cálculo e apresenta a estimativa.</p>
                 {this.renderTabs()}
-                <div className="animate-fadeUp rounded-b-3xl border border-t-0 border-[#EAEDF2] bg-white p-7 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
+                <div className="animate-fadeUp rounded-b-3xl border border-t-0 border-[#EAEDF2] bg-white p-5 sm:p-7 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
                   {this.state.quickStage === 'idle' && (
                     <div>
-                      <label ref={this.quickDropRef} className="mb-3 block cursor-pointer rounded-[14px] border-[1.5px] border-dashed border-[#A9D9BE] bg-[#E9F6EF] px-4.5 py-6.5 text-center">
+                      <label ref={this.quickDropRef} className="mb-3 block cursor-pointer rounded-[14px] border-[1.5px] border-dashed border-[#A9D9BE] bg-[#E9F6EF] px-4 py-6 text-center transition-transform active:scale-[0.99]">
                         <input type="file" onChange={this.onQuickFileSelected} style={{ display: 'none' }} />
-                        <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[#12805C]">
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[#12805C]">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                             <polyline points="17 8 12 3 7 8"></polyline>
                             <line x1="12" y1="3" x2="12" y2="15"></line>
@@ -1636,8 +1636,8 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           </div>
 
           {/* RIGHT: progress */}
-          <div className="flex min-w-[260px] max-w-[320px] flex-[1_1_280px] flex-col self-stretch">
-            <div className="flex h-full flex-col rounded-[20px] border border-[#EAEDF2] bg-[#EEF0F3] p-6 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
+          <div className="flex w-full min-w-0 max-w-full lg:max-w-[320px] lg:min-w-[260px] flex-col self-stretch">
+            <div className="flex h-full flex-col rounded-[20px] border border-[#EAEDF2] bg-[#EEF0F3] p-5 sm:p-6 shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
               <div className="mb-4.5 text-[12.5px] font-extrabold uppercase tracking-[0.05em] text-[#5B6478]">Progresso da análise</div>
               <div className="flex flex-1 flex-col py-1">
                 {ANALYSIS_STEPS.map((step, i) => {
@@ -1664,23 +1664,23 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
         </div>
 
         {/* Testimonials grid */}
-        <div className="mx-auto mt-16 max-w-[1480px]">
-          <div className="mb-8 text-center">
-            <h2 className="mb-2 text-[clamp(20px,2.4vw,26px)] font-extrabold tracking-[-0.01em] text-navy">Nossos clientes</h2>
+        <div className="mx-auto mt-12 sm:mt-16 max-w-[1480px]">
+          <div className="mb-6 sm:mb-8 text-center">
+            <h2 className="mb-2 text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-[-0.01em] text-navy">Nossos clientes</h2>
             <p className="text-sm text-[#5B6478]">Histórias de quem buscou clareza, segurança e orientação.</p>
           </div>
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
             {REVIEWS.map((review) => (
               <div
                 key={review.name}
-                className="flex flex-col items-center rounded-[20px] border-solid border-[1.5px] border-[#8FB4EA] bg-[#EEF0F3] p-6 text-center shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]"
+                className="flex flex-col items-center rounded-[20px] border-solid border-[1.5px] border-[#8FB4EA] bg-[#EEF0F3] p-5 sm:p-6 text-center shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)] transition-transform active:scale-[0.99]"
               >
-                <div className="mb-5 h-20 w-20 flex-shrink-0 overflow-hidden rounded-full border-solid border-[1.5px] border-[#8FB4EA] shadow-sm transition-transform duration-300 hover:scale-150">
+                <div className="mb-4 sm:mb-5 h-16 w-16 sm:h-20 sm:w-20 flex-shrink-0 overflow-hidden rounded-full border-solid border-[1.5px] border-[#8FB4EA] shadow-sm transition-transform duration-300 hover:scale-110">
                   <img src={review.image} alt={review.name} className="h-full w-full object-cover" />
                 </div>
-                <p className="mb-5 flex-1 text-base font-medium leading-[1.65] text-[#3B4457]">&ldquo;{review.quote}&rdquo;</p>
+                <p className="mb-4 sm:mb-5 flex-1 text-sm sm:text-base font-medium leading-[1.65] text-[#3B4457]">&ldquo;{review.quote}&rdquo;</p>
                 <div>
-                  <div className="text-[15px] font-extrabold text-navy">{review.name}</div>
+                  <div className="text-sm sm:text-[15px] font-extrabold text-navy">{review.name}</div>
                   <div className="text-xs text-[#93A0B4]">Cliente Premium Office</div>
                 </div>
               </div>
