@@ -166,7 +166,12 @@ interface State {
   docsError: string | null;
 }
 
-export default class ChatSection extends React.Component<{}, State> {
+export interface ChatSectionProps {
+  embedOnly?: boolean;
+  transparent?: boolean;
+}
+
+export default class ChatSection extends React.Component<ChatSectionProps, State> {
   chatRef = React.createRef<HTMLDivElement>();
   dropzoneRef = React.createRef<HTMLLabelElement>();
   quickDropRef = React.createRef<HTMLLabelElement>();
@@ -1548,10 +1553,36 @@ export default class ChatSection extends React.Component<{}, State> {
 
   render() {
     const { activeTab, stage } = this.state;
+    const isTransparent = Boolean(this.props.transparent);
+    const isEmbedOnly = Boolean(this.props.embedOnly);
+
     const STAGE_STEP: Record<Stage, number> = {
       qualify: 0, lead: 0, upload: 0, analyzing: 1, confirm: 1, calculating: 2, decision: 2, documents: 3, schedule: 3, done: 3, consultant: 3, revision: 3,
     };
     const currentStepIdx = STAGE_STEP[stage] ?? 0;
+
+    const chatCard = (
+      <div className={`animate-fadeUp overflow-hidden rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
+        <div className="flex items-center justify-center border-b border-[#16233F] bg-navy px-5 py-3.5">
+          <div className="text-sm font-extrabold text-white">Calculadora Assistente de Cálculos Premium Office</div>
+        </div>
+
+        <div ref={this.chatRef} data-chat-scroll className={`relative flex h-[600px] flex-col gap-4 overflow-y-auto ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} p-6`} style={{ scrollbarWidth: 'none' }}>
+          <img src="/chat-watermark.png" alt="" className="pointer-events-none absolute left-1/2 top-1/2 z-0 w-[65%] max-w-[260px] -translate-x-1/2 -translate-y-1/2 opacity-50" />
+          {this.renderFlyingBubble()}
+          {this.state.messages.map((m) => this.renderMessage(m))}
+        </div>
+
+        <div className={`border-t border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} px-5 py-4.5`}>
+          {this.renderChatInput()}
+          {this.renderComposer()}
+        </div>
+      </div>
+    );
+
+    if (isEmbedOnly) {
+      return chatCard;
+    }
 
     return (
       <section id="ia" data-screen-label="Chatbox IA" className="bg-mist px-5 py-10 sm:px-8 sm:py-14 md:px-16 md:py-24">
@@ -1567,26 +1598,7 @@ export default class ChatSection extends React.Component<{}, State> {
         <div className="mx-auto flex max-w-[1280px] flex-wrap items-start gap-8 lg:gap-10">
           {/* LEFT: chat / quick */}
           <div className="min-w-[340px] flex-1 max-w-[880px]">
-            {activeTab === 'chat' && (
-              <div>
-                <div className="animate-fadeUp overflow-hidden rounded-3xl border border-[#EAEDF2] bg-white shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]">
-                  <div className="flex items-center justify-center border-b border-[#16233F] bg-navy px-5 py-3.5">
-                    <div className="text-sm font-extrabold text-white">Calculadora Assistente de Cálculos Premium Office</div>
-                  </div>
-
-                  <div ref={this.chatRef} data-chat-scroll className="relative flex h-[600px] flex-col gap-4 overflow-y-auto bg-[#EEF0F3] p-6" style={{ scrollbarWidth: 'none' }}>
-                    <img src="/chat-watermark.png" alt="" className="pointer-events-none absolute left-1/2 top-1/2 z-0 w-[65%] max-w-[260px] -translate-x-1/2 -translate-y-1/2 opacity-50" />
-                    {this.renderFlyingBubble()}
-                    {this.state.messages.map((m) => this.renderMessage(m))}
-                  </div>
-
-                  <div className="border-t border-[#EAEDF2] bg-[#EEF0F3] px-5 py-4.5">
-                    {this.renderChatInput()}
-                    {this.renderComposer()}
-                  </div>
-                </div>
-              </div>
-            )}
+            {activeTab === 'chat' && chatCard}
 
             {activeTab === 'quick' && (
               <div>
