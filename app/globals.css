@@ -34,3 +34,15 @@ select {
 .text-wrap-pretty {
   text-wrap: pretty;
 }
+
+@keyframes wave {
+  0%, 60%, 100% {
+    transform: translateY(0) scale(0.9);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-6px) scale(1.15);
+    opacity: 1;
+  }
+}
+

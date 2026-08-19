@@ -166,14 +166,28 @@ interface State {
   docsError: string | null;
 }
 
+function formatColor(colorStr?: string): string | undefined {
+  if (!colorStr) return undefined;
+  const trimmed = colorStr.trim();
+  if (trimmed === 'transparent') return 'transparent';
+  if (/^[0-9a-fA-F]{3,8}$/.test(trimmed)) return `#${trimmed}`;
+  return trimmed;
+}
+
 export interface ChatSectionProps {
   embedOnly?: boolean;
   transparent?: boolean;
+  bg?: string;
+  chatBg?: string;
   fontSize?: string;
   textSize?: string;
   btnSize?: string;
   buttonSize?: string;
   scale?: string;
+  headerBg?: string;
+  headerColor?: string;
+  headerTitle?: string;
+  showHeader?: boolean;
 }
 
 export default class ChatSection extends React.Component<ChatSectionProps, State> {
@@ -932,10 +946,10 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     if (m.kind === 'typing') {
       return (
         <div key={m.id} style={wrapStyle}>
-          <Paper style={AI_BUBBLE}>
-            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#8A96AC', marginRight: '4px', animation: 'blink 1.2s infinite' }} />
-            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#8A96AC', marginRight: '4px', animation: 'blink 1.2s infinite 0.2s' }} />
-            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#8A96AC', animation: 'blink 1.2s infinite 0.4s' }} />
+          <Paper style={{ ...AI_BUBBLE, display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '14px 18px', minHeight: '40px' }}>
+            <span style={{ display: 'inline-block', width: '6.5px', height: '6.5px', borderRadius: '50%', background: '#8A96AC', animation: 'wave 1.2s ease-in-out infinite' }} />
+            <span style={{ display: 'inline-block', width: '6.5px', height: '6.5px', borderRadius: '50%', background: '#8A96AC', animation: 'wave 1.2s ease-in-out 0.2s infinite' }} />
+            <span style={{ display: 'inline-block', width: '6.5px', height: '6.5px', borderRadius: '50%', background: '#8A96AC', animation: 'wave 1.2s ease-in-out 0.4s infinite' }} />
           </Paper>
         </div>
       );
@@ -1620,13 +1634,43 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
 
     const hasCustomStyles = cardFontSize || btnMinHeight || btnPadding || btnFontSize || cardTransform;
 
+    const customBg = formatColor(this.props.bg);
+    const customChatBg = formatColor(this.props.chatBg) || customBg;
+    const customHeaderBg = formatColor(this.props.headerBg);
+    const customHeaderColor = formatColor(this.props.headerColor);
+    const headerTitle = this.props.headerTitle ?? 'Calculadora Assistente de Cálculos Premium Office';
+    const showHeader = this.props.showHeader !== false;
+
+    const cardBgClass = isTransparent || customBg ? '' : 'bg-white';
+    const bodyBgClass = isTransparent || customChatBg ? '' : 'bg-[#EEF0F3]';
+    const footerBgClass = isTransparent || customChatBg ? '' : 'bg-[#EEF0F3]';
+
+    const cardStyle: React.CSSProperties = {};
+    if (isTransparent) cardStyle.backgroundColor = 'transparent';
+    else if (customBg) cardStyle.backgroundColor = customBg;
+
+    const bodyStyle: React.CSSProperties = { scrollbarWidth: 'none' };
+    if (isTransparent) bodyStyle.backgroundColor = 'transparent';
+    else if (customChatBg) bodyStyle.backgroundColor = customChatBg;
+
+    const footerStyle: React.CSSProperties = {};
+    if (isTransparent) footerStyle.backgroundColor = 'transparent';
+    else if (customChatBg) footerStyle.backgroundColor = customChatBg;
+
+    const headerStyle: React.CSSProperties = {};
+    if (customHeaderBg) headerStyle.backgroundColor = customHeaderBg;
+    if (customHeaderColor) headerStyle.color = customHeaderColor;
+
     const STAGE_STEP: Record<Stage, number> = {
       qualify: 0, lead: 0, upload: 0, analyzing: 1, confirm: 1, calculating: 2, decision: 2, documents: 3, schedule: 3, done: 3, consultant: 3, revision: 3,
     };
     const currentStepIdx = STAGE_STEP[stage] ?? 0;
 
     const chatCard = (
-      <div className={`chat-embed-custom animate-fadeUp flex flex-col w-full ${isEmbedOnly ? 'h-full min-h-0' : ''} overflow-hidden rounded-2xl sm:rounded-3xl border border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-white'} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}>
+      <div
+        className={`chat-embed-custom animate-fadeUp flex flex-col w-full ${isEmbedOnly ? 'h-full min-h-0' : ''} overflow-hidden rounded-2xl sm:rounded-3xl border border-[#EAEDF2] ${cardBgClass} shadow-[0_32px_70px_-12px_rgba(11,27,51,0.35),0_12px_24px_rgba(11,27,51,0.12)]`}
+        style={cardStyle}
+      >
         {hasCustomStyles && (
           <style>{`
             ${cardFontSize ? `
@@ -1656,17 +1700,35 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             ` : ''}
           `}</style>
         )}
-        <div className="flex flex-shrink-0 items-center justify-center border-b border-[#16233F] bg-navy px-4 py-3 sm:px-5 sm:py-3.5">
-          <div className="text-xs sm:text-sm font-extrabold text-white text-center">Calculadora Assistente de Cálculos Premium Office</div>
-        </div>
+        {showHeader && (
+          <div
+            className="flex flex-shrink-0 items-center justify-center border-b border-[#16233F] bg-navy px-4 py-3 sm:px-5 sm:py-3.5"
+            style={headerStyle}
+          >
+            <div
+              className="text-xs sm:text-sm font-extrabold text-white text-center"
+              style={{ color: customHeaderColor || undefined }}
+            >
+              {headerTitle}
+            </div>
+          </div>
+        )}
 
-        <div ref={this.chatRef} data-chat-scroll className={`relative flex ${isEmbedOnly ? 'flex-1 min-h-0 h-full' : 'h-[500px] sm:h-[600px]'} flex-col gap-4 overflow-y-auto ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} p-4 sm:p-6`} style={{ scrollbarWidth: 'none' }}>
+        <div
+          ref={this.chatRef}
+          data-chat-scroll
+          className={`relative flex ${isEmbedOnly ? 'flex-1 min-h-0 h-full' : 'h-[500px] sm:h-[600px]'} flex-col gap-4 overflow-y-auto ${bodyBgClass} p-4 sm:p-6`}
+          style={bodyStyle}
+        >
           <img src="/chat-watermark.png" alt="" className="pointer-events-none absolute left-1/2 top-1/2 z-0 w-[65%] max-w-[260px] -translate-x-1/2 -translate-y-1/2 opacity-50" />
           {this.renderFlyingBubble()}
           {this.state.messages.map((m) => this.renderMessage(m))}
         </div>
 
-        <div className={`flex-shrink-0 border-t border-[#EAEDF2] ${isTransparent ? 'bg-transparent' : 'bg-[#EEF0F3]'} px-4 py-3.5 sm:px-5 sm:py-4.5`}>
+        <div
+          className={`flex-shrink-0 border-t border-[#EAEDF2] ${footerBgClass} px-4 py-3.5 sm:px-5 sm:py-4.5`}
+          style={footerStyle}
+        >
           {this.renderChatInput()}
           {this.renderComposer()}
         </div>
