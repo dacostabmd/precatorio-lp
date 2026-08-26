@@ -8,10 +8,15 @@ interface LeadPayload {
   persona: Persona;
 }
 
-// Pipeline (categoria) de Deal "IA PRECATORIO CALC" no Bitrix — funil alvo
-// desta LP. Estágio inicial "LISTA FRIA" (C602:NEW).
-const BITRIX_DEAL_CATEGORY_ID = 602;
-const BITRIX_DEAL_STAGE_ID = 'C602:NEW';
+// Pipeline (categoria) de Deal "[LP] PREMIUM OFFICE v2" no Bitrix — funil
+// alvo desta LP. Estágio inicial "LP — Novo Lead" (C534:NEW, etapa de
+// sistema) — não é o primeiro estágio por ordenação do pipeline (esse é
+// "LP — Follow up"), por isso precisa ser explícito.
+const BITRIX_DEAL_CATEGORY_ID = 534;
+const BITRIX_DEAL_STAGE_ID = 'C534:NEW';
+// Campo customizado "[MKT] Tipo de Tráfego" (lista) — item "Tráfego Pago".
+const BITRIX_DEAL_UF_TIPO_TRAFEGO = 'UF_CRM_1761655904';
+const BITRIX_DEAL_TIPO_TRAFEGO_PAGO_ID = '5428';
 // Uma automação desse pipeline descarta deals sem responsável atribuído —
 // confirmado via teste direto na API (deal sem ASSIGNED_BY_ID some
 // silenciosamente logo após a criação). Enquanto não há uma fila/usuário
@@ -73,6 +78,7 @@ async function enviarLeadParaBitrix(payload: LeadPayload) {
       SOURCE_ID: 'WEB',
       SOURCE_DESCRIPTION: 'Calculadora de Precatórios - LP',
       COMMENTS: `Perfil selecionado: ${personaLabel[payload.persona] || payload.persona}`,
+      [BITRIX_DEAL_UF_TIPO_TRAFEGO]: BITRIX_DEAL_TIPO_TRAFEGO_PAGO_ID,
     },
     params: { REGISTER_SONET_EVENT: 'Y' },
   });
