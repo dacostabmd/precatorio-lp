@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Persona } from '@/lib/calculator';
+import { enviarLeadParaMeta } from '@/lib/metaConversionsApi';
 
 interface LeadPayload {
   nomeCompleto: string;
@@ -95,6 +96,27 @@ export async function POST(request: Request) {
       celular: celular.trim(),
       persona: (persona as Persona) || 'autor',
     });
+
+    // Card criado no Bitrix -> dispara o evento "Lead" para a Meta Conversions
+    // API (controle do marketing). Não bloqueia/quebra a resposta ao usuário
+    // se a Meta falhar: o lead já está registrado no CRM.
+    if (resultado.enviado && resultado.leadId) {
+      const ip =
+        request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+        request.headers.get('x-real-ip') ||
+        undefined;
+      const userAgent = request.headers.get('user-agent') || undefined;
+
+      await enviarLeadParaMeta({
+        nomeCompleto: nomeCompleto.trim(),
+        celular: celular.trim(),
+        eventId: `bitrix-deal-${resultado.leadId}`,
+        ip,
+        userAgent,
+      }).catch((error) => {
+        console.error('Erro ao enviar evento Lead para a Meta Conversions API:', error);
+      });
+    }
 
     return NextResponse.json({ ok: true, ...resultado });
   } catch (error: any) {
