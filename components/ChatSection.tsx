@@ -649,7 +649,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     this.pushMessages(
       userText(`${nomeCompleto} · ${cpf}`, true),
       aiText(
-        `Obrigado, ${primeiroNome}! Já iniciei a consulta do seu CPF em segundo plano no sistema dos tribunais.\n\nEnquanto isso, você pode me perguntar qualquer dúvida sobre precatórios (como regras de cálculo, prazos e deságio) aqui embaixo ou enviar o arquivo do ofício (PDF ou imagem) para anteciparmos a sua análise!`
+        `Obrigado, ${primeiroNome}! Agora envie o arquivo do ofício (PDF ou imagem) para analisarmos os dados e calcularmos a sua proposta personalizada.\n\nSe tiver qualquer dúvida sobre o seu precatório, regras de cálculo, prazos ou deságio, pode me perguntar aqui embaixo!`
       )
     );
 
@@ -673,20 +673,13 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             bitrixDealId: data.leadId || null,
             apiExtractedData: data.apiExtractedData || null,
           });
-
-          if (data.apiExtractedData?.encontrado && data.apiExtractedData?.totalProcessos > 0) {
-            this.pushMessages(
-              aiText(
-                `💡 Localizei ${data.apiExtractedData.totalProcessos} processo(s) vinculado(s) ao seu CPF nos tribunais! Seus dados foram sincronizados com seu card de atendimento.`
-              )
-            );
-          }
         }
       })
       .catch((err) => {
         console.warn('[lead-bg] Erro ao sincronizar lead em background:', err);
       });
   };
+
 
 
   onCorrigirDados = (e: React.MouseEvent) => {

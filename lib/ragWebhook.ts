@@ -5,7 +5,10 @@ export interface SolicitacaoRagWebhook {
   messages: MensagemChat[];
   persona: Persona;
   bitrixDealId?: number;
+  leadNome?: string;
+  leadCpf?: string;
 }
+
 
 export interface RespostaRagWebhook {
   text: string;
