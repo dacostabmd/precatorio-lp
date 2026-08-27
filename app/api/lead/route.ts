@@ -248,14 +248,58 @@ async function enviarLeadParaBitrix(payload: LeadPayload) {
 
 
     } else {
-      infoTribunaisTexto += `Nenhum processo público localizado nos tribunais consultados.`;
+      const statusTribunais = (info.detalhesPorTribunal || []).map((t) => {
+        let status = '❌ Nada localizado na base aberta';
+        if (t.code === 620 || (t.erros && t.erros.some((e: string) => /restrit|segredo|sigil/i.test(e)))) {
+          status = '⚠️ Acesso restrito / Segredo de Justiça';
+        } else if (t.code === 504) {
+          status = '⏳ Tempo limite de resposta excedido';
+        }
+        return `• ${t.tribunal}:\n  ${status}`;
+      }).join('\n\n');
+
+      infoExtrasTexto = `========================================
+🔍 CONSULTA DE TRIBUNAIS (NADA LOCALIZADO)
+========================================
+
+A consulta automática por CPF foi realizada com sucesso em todos os tribunais integrados, mas nenhum processo público ou precatório foi localizado na base aberta:
+
+${statusTribunais || '• TRF-1 (DF, GO, MT, BA, etc.): ❌ Nada localizado\n\n• TRF-2 (RJ e ES): ❌ Nada localizado\n\n• TRF-3 (SP e MS): ❌ Nada localizado\n\n• TRF-5 (Nordeste): ❌ Nada localizado\n\n• TRF-6 (Minas Gerais Federal): ❌ Nada localizado\n\n• TJSP (São Paulo Estadual): ❌ Nada localizado\n\n• TJMG (Minas Gerais Estadual): ❌ Nada localizado'}
+
+----------------------------------------
+💡 DICA PARA O CONSULTOR / VENDEDOR:
+----------------------------------------
+• O titular pode possuir processo em segredo de justiça, tribunal ainda não integrado ou expedido recentemente.
+• Solicite o número do processo ou o espelho/ofício diretamente pelo WhatsApp.`;
+
+      infoTribunaisTexto += `❌ NENHUM PROCESSO LOCALIZADO NOS TRIBUNAIS:\n\n`;
+      if (info.detalhesPorTribunal && info.detalhesPorTribunal.length > 0) {
+        info.detalhesPorTribunal.forEach((t) => {
+          let st = 'Nada localizado (200 OK)';
+          if (t.code === 620) st = 'Acesso restrito / Segredo de Justiça';
+          else if (t.code === 504) st = 'Timeout de resposta';
+          infoTribunaisTexto += `• ${t.tribunal}: ${st}\n`;
+        });
+      } else {
+        infoTribunaisTexto += `• Tribunais consultados: TRF-1, TRF-2, TRF-3, TRF-5, TRF-6, TJSP, TJMG (Nada localizado)\n`;
+      }
     }
 
     if (info.restricoes.length > 0) {
       infoTribunaisTexto += `\n\n⚠️ TRIBUNAIS COM ACESSO RESTRITO / SEGREDO:\n` +
         info.restricoes.map(r => `• ${r.tribunal}: ${r.detalhe}`).join('\n');
     }
+  } else {
+    infoExtrasTexto = `========================================
+⚠️ CONSULTA AUTOMÁTICA PENDENTE
+========================================
+
+A consulta automática de tribunais não pôde ser executada no momento do cadastro.
+
+• Solicite o número do processo ou o arquivo do ofício diretamente ao cliente via WhatsApp.`;
+    infoTribunaisTexto += `⚠️ Consulta automática nos tribunais não foi executada no momento do cadastro.\n`;
   }
+
 
   if (payload.utms && Object.keys(payload.utms).length > 0) {
     infoTribunaisTexto += `\n\n🎯 ORIGEM DO TRÁFEGO (MARKETING):\n`;
