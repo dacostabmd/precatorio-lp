@@ -7,7 +7,7 @@ atualização e a metodologia aprovada para substituí-la.
 > **Status atual: exibição de valores calculados SUSPENSA em produção.**
 > A fórmula de atualização vigente superestima o valor devido em ~2x (ver
 > [Auditoria](#auditoria-da-atualização-monetária)). Até a correção entrar, a LP
-> captura nome/celular e anexa o ofício ao Bitrix, mas **não exibe valores em
+> captura nome/CPF e anexa o ofício ao Bitrix, mas **não exibe valores em
 > reais ao usuário**. Decisão tomada em 2026-08-03.
 
 ---

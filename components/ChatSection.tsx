@@ -13,6 +13,8 @@ import {
   type Analise,
 } from '@/lib/data';
 import { Persona } from '@/lib/calculator';
+import DevApiModal from './DevApiModal';
+import { capturarUtms, obterUtmsArmazenadas } from '@/lib/utms';
 
 // ---------------------------------------------------------------------------
 // Message model
@@ -46,6 +48,23 @@ const userText = (text: string, noAnim = false): any => ({ id: ++msgId, from: 'u
 const aiTyping = (): any => ({ id: ++msgId, from: 'ai', kind: 'typing' });
 const aiCard = (kind: string, extra: any): any => ({ id: ++msgId, from: 'ai', kind, ...extra });
 const aiProcessing = (): any => ({ id: ++msgId, from: 'ai', kind: 'processing', stepIdx: 0 });
+
+// Validação de CPF por dígito verificador (algoritmo padrão da Receita Federal).
+function isValidCpf(value: string): boolean {
+  const cpf = value.replace(/\D/g, '');
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+
+  const calcCheckDigit = (length: number) => {
+    let sum = 0;
+    for (let i = 0; i < length; i++) {
+      sum += parseInt(cpf[i], 10) * (length + 1 - i);
+    }
+    const rest = (sum * 10) % 11;
+    return rest === 10 ? 0 : rest;
+  };
+
+  return calcCheckDigit(9) === parseInt(cpf[9], 10) && calcCheckDigit(10) === parseInt(cpf[10], 10);
+}
 
 // Rótulos exibidos no card de "processando" enquanto a API responde — puramente
 // cosméticos (não refletem chamadas reais além da requisição única ao /api/chat),
@@ -157,13 +176,15 @@ interface State {
   composerText: string;
   persona: Persona;
   leadNome: string;
-  leadCelular: string;
+  leadCpf: string;
   leadSubmitting: boolean;
   leadError: string | null;
   bitrixDealId: number | null;
   pendingDocs: File[];
   docsUploading: boolean;
   docsError: string | null;
+  apiExtractedData: any | null;
+  isDevModalOpen: boolean;
 }
 
 function formatColor(colorStr?: string): string | undefined {
@@ -209,16 +230,19 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     composerText: '',
     persona: 'autor',
     leadNome: '',
-    leadCelular: '',
+    leadCpf: '',
     leadSubmitting: false,
     leadError: null,
     bitrixDealId: null,
     pendingDocs: [],
     docsUploading: false,
     docsError: null,
+    apiExtractedData: null,
+    isDevModalOpen: false,
   };
 
   componentDidMount() {
+    capturarUtms();
     this.startRevealLoop();
   }
 
@@ -378,7 +402,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
 
     this.pushMessages(
       userText(label, true),
-      aiText('Perfeito! Para liberar sua calculadora personalizada, preciso só do seu nome completo e um número de celular para contato.')
+      aiText('Perfeito! Para liberar sua calculadora personalizada, preciso só do seu nome completo e do seu CPF.')
     );
     this.setState({ stage: 'lead', persona: p });
   };
@@ -594,55 +618,76 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     this.setState({ leadNome: e.target.value, leadError: null });
   };
 
-  onLeadCelularChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  onLeadCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
     let formatted = digits;
-    if (digits.length > 2) formatted = `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-    if (digits.length > 7) {
-      formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+    if (digits.length > 3) formatted = `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length > 6) formatted = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    if (digits.length > 9) {
+      formatted = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
     }
-    this.setState({ leadCelular: formatted, leadError: null });
+    this.setState({ leadCpf: formatted, leadError: null });
   };
 
   onLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const nomeCompleto = this.state.leadNome.trim();
-    const celular = this.state.leadCelular.trim();
+    const cpf = this.state.leadCpf.trim();
 
     if (nomeCompleto.length < 3) {
       this.setState({ leadError: 'Informe seu nome completo.' });
       return;
     }
-    if (celular.replace(/\D/g, '').length < 10) {
-      this.setState({ leadError: 'Informe um celular válido com DDD.' });
+    if (!isValidCpf(cpf)) {
+      this.setState({ leadError: 'Informe um CPF válido.' });
       return;
     }
 
-    this.setState({ leadSubmitting: true, leadError: null });
+    const primeiroNome = nomeCompleto.split(' ')[0] || nomeCompleto;
 
-    try {
-      const res = await fetch('/api/lead', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nomeCompleto, celular, persona: this.state.persona }),
+    // 1. Resposta imediata na tela (0ms) — sem esperar a requisição de tribunais!
+    this.pushMessages(
+      userText(`${nomeCompleto} · ${cpf}`, true),
+      aiText(
+        `Obrigado, ${primeiroNome}! Já iniciei a consulta do seu CPF em segundo plano no sistema dos tribunais.\n\nEnquanto isso, você pode me perguntar qualquer dúvida sobre precatórios (como regras de cálculo, prazos e deságio) aqui embaixo ou enviar o arquivo do ofício (PDF ou imagem) para anteciparmos a sua análise!`
+      )
+    );
+
+    this.setState({
+      stage: 'upload',
+      leadSubmitting: false,
+      leadError: null,
+    });
+
+    // 2. Consulta InfoSimples e Envio ao Bitrix24 de forma 100% assíncrona (background)
+    const utms = obterUtmsArmazenadas();
+    fetch('/api/lead', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nomeCompleto, cpf, persona: this.state.persona, utms }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.ok) {
+          this.setState({
+            bitrixDealId: data.leadId || null,
+            apiExtractedData: data.apiExtractedData || null,
+          });
+
+          if (data.apiExtractedData?.encontrado && data.apiExtractedData?.totalProcessos > 0) {
+            this.pushMessages(
+              aiText(
+                `💡 Localizei ${data.apiExtractedData.totalProcessos} processo(s) vinculado(s) ao seu CPF nos tribunais! Seus dados foram sincronizados com seu card de atendimento.`
+              )
+            );
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('[lead-bg] Erro ao sincronizar lead em background:', err);
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Não foi possível registrar seus dados.');
-      }
-
-      const data = await res.json().catch(() => ({}));
-
-      this.pushMessages(
-        userText(`${nomeCompleto} · ${celular}`, true),
-        aiText('Obrigado! Agora envie o arquivo do ofício (PDF/Imagem) para liberar sua análise personalizada.')
-      );
-      this.setState({ stage: 'upload', leadSubmitting: false, bitrixDealId: data.leadId || null });
-    } catch (err: any) {
-      this.setState({ leadSubmitting: false, leadError: err.message || 'Erro ao enviar seus dados. Tente novamente.' });
-    }
   };
+
 
   onCorrigirDados = (e: React.MouseEvent) => {
     this.flyBubble('Corrigir dados', e.currentTarget as HTMLElement, () => {
@@ -650,12 +695,30 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
         userText('Corrigir dados', true),
         aiText('Sem problemas. Encaminhei o documento para revisão manual da nossa equipe, que entrará em contato para ajustar os dados.')
       );
-      this.setState({ stage: 'revision' });
+      this.setState({
+        stage: 'revision',
+        isDevModalOpen: process.env.NODE_ENV === 'development',
+      });
     });
   };
 
   onConfirmarDados = (e: React.MouseEvent) => {
     this.flyBubble('Dados confirmados', e.currentTarget as HTMLElement, () => this.confirmarDadosCommit());
+  };
+
+  atualizarLeadBitrix = (payload: {
+    acao: 'simulacao_calculada' | 'agendou_reuniao' | 'falar_consultor' | 'solicitar_revisao' | 'aceitou_proposta';
+    simulacao?: any;
+    horarioReuniao?: string;
+    honorarios?: string;
+  }) => {
+    const dealId = this.state.bitrixDealId;
+    if (!dealId) return;
+    fetch('/api/lead/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dealId, ...payload }),
+    }).catch((err) => console.warn('[bitrix-update] Erro ao atualizar lead:', err));
   };
 
   confirmarDadosCommit = () => {
@@ -670,6 +733,12 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
         { label: 'Projeção futura (cenário 3 anos)', value: formatBRL(projecaoFutura) },
         { label: 'Proposta indicativa de antecipação', value: `${formatBRL(valorMinimo)} – ${formatBRL(valorMaximo)}` },
       ];
+
+      this.atualizarLeadBitrix({
+        acao: 'simulacao_calculada',
+        simulacao: { valorAtualizado, projecaoFutura, valorMinimo, valorMaximo, items },
+      });
+
       this.setState((s) => ({
         messages: [
           ...s.messages.filter((m) => m.kind !== 'typing'),
@@ -677,6 +746,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           aiText('Como você gostaria de prosseguir?'),
         ],
         stage: 'decision',
+        isDevModalOpen: process.env.NODE_ENV === 'development',
       }));
       this.startRevealLoop();
     }, 2000);
@@ -695,6 +765,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
 
   onAceitar = (e: React.MouseEvent) => {
     this.flyBubble('Aceitar proposta', e.currentTarget as HTMLElement, () => {
+      this.atualizarLeadBitrix({ acao: 'aceitou_proposta' });
       this.pushMessages(userText('Aceitar proposta', true), aiCard('doc-list', { items: DOCS_NECESSARIOS.map((d) => ({ label: d })) }));
       this.setState({ stage: 'documents' });
     });
@@ -779,25 +850,37 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
 
   onSelectSlot = (label: string, e: React.MouseEvent) => {
     this.flyBubble(label, e.currentTarget as HTMLElement, () => {
+      this.atualizarLeadBitrix({ acao: 'agendou_reuniao', horarioReuniao: label });
       this.pushMessages(userText(label, true), aiText('Combinado! Reunião confirmada.'), aiCard('meeting-card', { slot: label }));
-      this.setState({ stage: 'done' });
+      this.setState({
+        stage: 'done',
+        isDevModalOpen: process.env.NODE_ENV === 'development',
+      });
     });
   };
 
   onFalarConsultor = (e: React.MouseEvent) => {
     this.flyBubble('Falar com consultor', e.currentTarget as HTMLElement, () => {
+      this.atualizarLeadBitrix({ acao: 'falar_consultor' });
       this.pushMessages(userText('Falar com consultor', true), aiText('Sem problemas! Um consultor humano pode te atender agora mesmo pelo WhatsApp.'));
-      this.setState({ stage: 'consultant' });
+      this.setState({
+        stage: 'consultant',
+        isDevModalOpen: process.env.NODE_ENV === 'development',
+      });
     });
   };
 
   onSolicitarRevisao = (e: React.MouseEvent) => {
     this.flyBubble('Solicitar revisão', e.currentTarget as HTMLElement, () => {
+      this.atualizarLeadBitrix({ acao: 'solicitar_revisao' });
       this.pushMessages(
         userText('Solicitar revisão', true),
         aiText('Entendido. Seus dados serão encaminhados para revisão manual da nossa equipe jurídica e financeira antes de qualquer proposta.')
       );
-      this.setState({ stage: 'revision' });
+      this.setState({
+        stage: 'revision',
+        isDevModalOpen: process.env.NODE_ENV === 'development',
+      });
     });
   };
 
@@ -1293,7 +1376,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
       );
     }
     if (stage === 'lead') {
-      const { leadNome, leadCelular, leadSubmitting, leadError } = this.state;
+      const { leadNome, leadCpf, leadSubmitting, leadError } = this.state;
       return (
         <form onSubmit={this.onLeadSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <input
@@ -1315,11 +1398,12 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             }}
           />
           <input
-            type="tel"
-            value={leadCelular}
-            onChange={this.onLeadCelularChange}
-            placeholder="Celular com DDD (ex: (21) 98765-4321)"
-            autoComplete="tel"
+            type="text"
+            inputMode="numeric"
+            value={leadCpf}
+            onChange={this.onLeadCpfChange}
+            placeholder="CPF (ex: 123.456.789-00)"
+            autoComplete="off"
             disabled={leadSubmitting}
             style={{
               border: '1.5px solid #DDE2EA',
@@ -1736,7 +1820,49 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     );
 
     if (isEmbedOnly) {
-      return chatCard;
+      return (
+        <>
+          {chatCard}
+          <DevApiModal
+            isOpen={this.state.isDevModalOpen}
+            onClose={() => this.setState({ isDevModalOpen: false })}
+            apiData={this.state.apiExtractedData}
+            leadNome={this.state.leadNome}
+            leadCpf={this.state.leadCpf}
+            bitrixDealId={this.state.bitrixDealId}
+          />
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              onClick={() => this.setState({ isDevModalOpen: true })}
+              style={{
+                position: 'fixed',
+                bottom: '16px',
+                left: '16px',
+                zIndex: 9999,
+                backgroundColor: '#0F172A',
+                color: '#38BDF8',
+                border: '1px solid #38BDF8',
+                borderRadius: '9999px',
+                padding: '8px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                boxShadow: '0 10px 25px -5px rgba(0,0,0,0.4)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <span>🔬 [DEV] Dados API InfoSimples</span>
+              {this.state.apiExtractedData?.totalProcessos > 0 && (
+                <span style={{ backgroundColor: '#059669', color: '#fff', padding: '1px 6px', borderRadius: '10px', fontSize: '10px' }}>
+                  {this.state.apiExtractedData.totalProcessos}
+                </span>
+              )}
+            </button>
+          )}
+        </>
+      );
     }
 
     return (
@@ -1842,6 +1968,46 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             ))}
           </div>
         </div>
+
+        <DevApiModal
+          isOpen={this.state.isDevModalOpen}
+          onClose={() => this.setState({ isDevModalOpen: false })}
+          apiData={this.state.apiExtractedData}
+          leadNome={this.state.leadNome}
+          leadCpf={this.state.leadCpf}
+          bitrixDealId={this.state.bitrixDealId}
+        />
+
+        {process.env.NODE_ENV === 'development' && (
+          <button
+            onClick={() => this.setState({ isDevModalOpen: true })}
+            style={{
+              position: 'fixed',
+              bottom: '16px',
+              left: '16px',
+              zIndex: 9999,
+              backgroundColor: '#0F172A',
+              color: '#38BDF8',
+              border: '1px solid #38BDF8',
+              borderRadius: '9999px',
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.4)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>🔬 [DEV] Dados API InfoSimples</span>
+            {this.state.apiExtractedData?.totalProcessos > 0 && (
+              <span style={{ backgroundColor: '#059669', color: '#fff', padding: '1px 6px', borderRadius: '10px', fontSize: '10px' }}>
+                {this.state.apiExtractedData.totalProcessos}
+              </span>
+            )}
+          </button>
+        )}
       </section>
     );
   }

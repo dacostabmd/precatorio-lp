@@ -8,14 +8,9 @@ function hash(value: string) {
   return crypto.createHash('sha256').update(value.trim().toLowerCase()).digest('hex');
 }
 
-function normalizarCelularBR(celular: string) {
-  const digitos = celular.replace(/\D/g, '');
-  return digitos.startsWith('55') ? digitos : `55${digitos}`;
-}
-
 interface LeadEventInput {
   nomeCompleto: string;
-  celular: string;
+  cpf: string;
   eventId: string;
   ip?: string | null;
   userAgent?: string | null;
@@ -24,13 +19,15 @@ interface LeadEventInput {
 /**
  * Envia o evento padrão "Lead" para a Meta Conversions API (server-side),
  * associado ao dataset configurado (META_PIXEL_ID). Dados de PII (nome,
- * celular) vão hasheados em SHA-256 conforme exigido pela Meta. Falha
- * silenciosamente (loga e segue) se as credenciais não estiverem
- * configuradas — o chamador decide se propaga erros de chamada.
+ * CPF) vão hasheados em SHA-256 conforme exigido pela Meta. O CPF é enviado
+ * como external_id (identificador único de cliente) — não há campo de
+ * telefone/e-mail coletado nesta LP para usar em ph/em. Falha silenciosamente
+ * (loga e segue) se as credenciais não estiverem configuradas — o chamador
+ * decide se propaga erros de chamada.
  */
 export async function enviarLeadParaMeta({
   nomeCompleto,
-  celular,
+  cpf,
   eventId,
   ip,
   userAgent,
@@ -46,7 +43,7 @@ export async function enviarLeadParaMeta({
   const sobrenome = resto.join(' ');
 
   const userData: Record<string, unknown> = {
-    ph: [hash(normalizarCelularBR(celular))],
+    external_id: [hash(cpf.replace(/\D/g, ''))],
     fn: [hash(primeiroNome)],
   };
   if (sobrenome) userData.ln = [hash(sobrenome)];

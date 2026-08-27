@@ -13,7 +13,7 @@
 
 ** O chat deverá ter as seguintes etapas:
 
-- Qualificação (Extrai Nome e Celular do usuário, é orientado a isso e só deve liberar a calculadora apenas após a extração )
+- Qualificação (Extrai Nome e CPF do usuário, é orientado a isso e só deve liberar a calculadora apenas após a extração )
 - Calculadora (Calcula o valor do precatório)
 - Captação de Lead 
 
