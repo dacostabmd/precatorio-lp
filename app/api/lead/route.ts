@@ -58,6 +58,10 @@ const BITRIX_DEAL_UF_TIPO_PRECATORIO = 'UF_CRM_1756758368'; // [P] TIPO DE PRECA
 const BITRIX_DEAL_UF_TRIBUNAL_FEDERAL = 'UF_CRM_1767021573716'; // [P] TRIBUNAL FEDERAL (Enum)
 const BITRIX_DEAL_UF_TRIBUNAL_ESTADUAL = 'UF_CRM_1767037264990'; // [P] TRIBUNAL ESTADUAL (Enum)
 const BITRIX_DEAL_UF_LP_PRECATORIOS = 'UF_CRM_1772054165226'; // [LP] PRECATÓRIOS (Enum)
+const BITRIX_DEAL_UF_MKT_ORIGEM_LEAD = 'UF_CRM_1787687488497'; // [MKT] DE ONDE VEIO O LEAD? (Enum)
+const BITRIX_DEAL_ORIGEM_LEAD_LPIA_ID = '9387'; // LP-IA
+const BITRIX_DEAL_UF_MKT_FUNIL_ORIGEM = 'UF_CRM_1779394786511'; // [MKT] FUNIL DE ORIGEM (Enum)
+const BITRIX_DEAL_FUNIL_PREMIUM_OFFICE_ID = '8812'; // LP PREMIUM OFFICE
 
 // Mapeia tribunal identificado para os IDs exatos de enumeração do Bitrix
 function mapTribunalToBitrixIds(tribunal?: string) {
@@ -355,7 +359,10 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
     [BITRIX_DEAL_UF_CPF_BOT]: payload.cpf,
     [BITRIX_DEAL_UF_NOME_CLIENTE]: payload.nomeCompleto,
     [BITRIX_DEAL_UF_TIPO_TRAFEGO]: BITRIX_DEAL_TIPO_TRAFEGO_PAGO_ID,
+    [BITRIX_DEAL_UF_MKT_ORIGEM_LEAD]: BITRIX_DEAL_ORIGEM_LEAD_LPIA_ID,
+    [BITRIX_DEAL_UF_MKT_FUNIL_ORIGEM]: BITRIX_DEAL_FUNIL_PREMIUM_OFFICE_ID,
   };
+
 
   if (payload.utms?.utm_source) dealFields.UTM_SOURCE = payload.utms.utm_source;
   if (payload.utms?.utm_medium) dealFields.UTM_MEDIUM = payload.utms.utm_medium;
