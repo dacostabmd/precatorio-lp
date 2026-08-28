@@ -433,7 +433,7 @@ export async function POST(request: Request) {
       utms: (utms as UtmParams) || undefined,
     });
 
-    // Card criado no Bitrix -> dispara o evento "Lead" para a Meta Conversions API
+    // Card criado no Bitrix com sucesso -> dispara o evento "AIChatLead" e "Lead" para a Meta Conversions API
     if (resultado.enviado && resultado.leadId) {
       const ip =
         request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
@@ -445,10 +445,15 @@ export async function POST(request: Request) {
         nomeCompleto: nomeCompleto.trim(),
         cpf: cpf.trim(),
         eventId: `bitrix-deal-${resultado.leadId}`,
+        eventName: 'AIChatLead',
         ip,
         userAgent,
+        customData: {
+          bitrixDealId: resultado.leadId,
+          persona: persona || 'autor',
+        },
       }).catch((error) => {
-        console.error('Erro ao enviar evento Lead para a Meta Conversions API:', error);
+        console.error('Erro ao enviar evento AIChatLead para a Meta Conversions API:', error);
       });
     }
 

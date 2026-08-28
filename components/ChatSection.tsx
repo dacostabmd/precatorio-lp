@@ -673,6 +673,47 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             bitrixDealId: data.leadId || null,
             apiExtractedData: data.apiExtractedData || null,
           });
+
+          // Dispara o Pixel da Meta (AIChatLead) exclusivamente após a criação do card com sucesso no Bitrix
+          if (data.leadId) {
+            const eventId = `bitrix-deal-${data.leadId}`;
+
+            // 1. Disparo direto caso o Pixel da Meta (fbq) esteja presente na mesma janela
+            if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
+              try {
+                (window as any).fbq(
+                  'trackCustom',
+                  'AIChatLead',
+                  {
+                    content_name: 'Lead Qualificado Chat IA',
+                    lead_id: data.leadId,
+                    persona: this.state.persona,
+                  },
+                  { eventID: eventId }
+                );
+              } catch (pixelErr) {
+                console.warn('[meta-pixel] Erro ao disparar fbq AIChatLead:', pixelErr);
+              }
+            }
+
+            // 2. Disparo via postMessage para a janela pai (WordPress / PixelYourSite) caso esteja em iframe
+            if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
+              try {
+                window.parent.postMessage(
+                  {
+                    type: 'META_PIXEL_TRACK',
+                    eventName: 'AIChatLead',
+                    eventId,
+                    leadId: data.leadId,
+                    persona: this.state.persona,
+                  },
+                  '*'
+                );
+              } catch (postMsgErr) {
+                console.warn('[meta-pixel] Erro ao emitir postMessage para window.parent:', postMsgErr);
+              }
+            }
+          }
         }
       })
       .catch((err) => {
@@ -910,6 +951,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
   };
 
   onComposerSend = async () => {
+    if (this.state.stage === 'qualify' || this.state.stage === 'lead') return;
     const text = this.state.composerText.trim();
     if (!text) return;
     this.setState({ composerText: '' });
@@ -1288,7 +1330,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
   renderComposer() {
     const canSend = this.state.composerText.trim().length > 0;
     return (
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', alignItems: 'flex-end', marginTop: '10px', width: '100%', maxWidth: '480px', marginLeft: 'auto', marginRight: 'auto' }}>
         <textarea
           value={this.state.composerText}
           onChange={this.onComposerChange}
@@ -1370,8 +1412,14 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     }
     if (stage === 'lead') {
       const { leadNome, leadCpf, leadSubmitting, leadError } = this.state;
+      const cpfDigits = leadCpf.replace(/\D/g, '');
+      const cpfInvalido = cpfDigits.length === 11 && !isValidCpf(leadCpf);
+      const podeEnviar = leadNome.trim().length >= 3 && isValidCpf(leadCpf) && !leadSubmitting;
       return (
-        <form onSubmit={this.onLeadSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <form
+          onSubmit={this.onLeadSubmit}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}
+        >
           <input
             type="text"
             value={leadNome}
@@ -1380,6 +1428,8 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             autoComplete="name"
             disabled={leadSubmitting}
             style={{
+              width: '100%',
+              maxWidth: '360px',
               border: '1.5px solid #DDE2EA',
               borderRadius: '10px',
               padding: '11px 14px',
@@ -1388,6 +1438,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
               color: '#1C2331',
               background: '#fff',
               outline: 'none',
+              textAlign: 'center',
             }}
           />
           <input
@@ -1398,8 +1449,11 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
             placeholder="CPF (ex: 123.456.789-00)"
             autoComplete="off"
             disabled={leadSubmitting}
+            aria-invalid={cpfInvalido}
             style={{
-              border: '1.5px solid #DDE2EA',
+              width: '100%',
+              maxWidth: '360px',
+              border: `1.5px solid ${cpfInvalido ? '#C4392B' : '#DDE2EA'}`,
               borderRadius: '10px',
               padding: '11px 14px',
               fontSize: '13px',
@@ -1407,20 +1461,27 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
               color: '#1C2331',
               background: '#fff',
               outline: 'none',
+              textAlign: 'center',
             }}
           />
+          {cpfInvalido && !leadError && (
+            <div style={{ width: '100%', maxWidth: '360px', fontSize: '12px', color: '#C4392B', fontWeight: 600, textAlign: 'center' }}>
+              CPF inválido. Confira os números digitados.
+            </div>
+          )}
           {leadError && (
-            <div style={{ fontSize: '12px', color: '#C4392B', fontWeight: 600 }}>{leadError}</div>
+            <div style={{ width: '100%', maxWidth: '360px', fontSize: '12px', color: '#C4392B', fontWeight: 600, textAlign: 'center' }}>{leadError}</div>
           )}
           <Button
             type="submit"
             loading={leadSubmitting}
+            disabled={!podeEnviar}
             className="transition-colors duration-250 hover:!bg-[#F7F5F1] hover:!text-navy-accent"
-            style={{ height: 'auto', minHeight: '42px', width: '100%', padding: '12px', borderRadius: '10px', border: '1.5px solid #0D1F38', background: '#0D1F38', color: '#fff', fontWeight: 700, fontSize: '13px', lineHeight: 1.4 }}
+            style={{ height: 'auto', minHeight: '42px', width: '100%', maxWidth: '360px', padding: '12px', borderRadius: '10px', border: '1.5px solid #0D1F38', background: '#0D1F38', color: '#fff', fontWeight: 700, fontSize: '13px', lineHeight: 1.4, opacity: podeEnviar ? 1 : 0.5, cursor: podeEnviar ? 'pointer' : 'not-allowed' }}
           >
             Liberar minha calculadora
           </Button>
-          <p style={{ fontSize: '11px', color: '#93A0B4', margin: 0, lineHeight: 1.5 }}>
+          <p style={{ width: '100%', maxWidth: '360px', fontSize: '11px', color: '#93A0B4', margin: 0, lineHeight: 1.5, textAlign: 'center' }}>
             Seus dados são usados apenas para contato sobre sua análise, conforme a LGPD.
           </p>
         </form>
@@ -1807,7 +1868,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           style={footerStyle}
         >
           {this.renderChatInput()}
-          {this.renderComposer()}
+          {stage !== 'qualify' && stage !== 'lead' && this.renderComposer()}
         </div>
       </div>
     );
