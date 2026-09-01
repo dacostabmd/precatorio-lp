@@ -11,6 +11,7 @@ function hash(value: string) {
 interface LeadEventInput {
   nomeCompleto: string;
   cpf: string;
+  telefone?: string;
   eventId: string;
   eventName?: string;
   eventSourceUrl?: string;
@@ -22,13 +23,14 @@ interface LeadEventInput {
 /**
  * Envia o evento de conversão ("AIChatLead" e "Lead") para a Meta Conversions API (server-side),
  * associado ao dataset configurado (META_PIXEL_ID). Dados de PII (nome,
- * CPF) vão hasheados em SHA-256 conforme exigido pela Meta. O CPF é enviado
- * como external_id (identificador único de cliente) — permitindo deduplicação
- * automática e alta pontuação no Event Match Quality (EMQ).
+ * CPF, telefone) vão hasheados em SHA-256 conforme exigido pela Meta. O CPF é enviado
+ * como external_id (identificador único de cliente) e o telefone em ph (E.164) — permitindo
+ * deduplicação automática e alta pontuação no Event Match Quality (EMQ).
  */
 export async function enviarLeadParaMeta({
   nomeCompleto,
   cpf,
+  telefone,
   eventId,
   eventName = 'AIChatLead',
   eventSourceUrl = 'https://premiumofficeprecatorio.com.br/lp-premium-office-b/',
@@ -51,6 +53,11 @@ export async function enviarLeadParaMeta({
     fn: [hash(primeiroNome)],
   };
   if (sobrenome) userData.ln = [hash(sobrenome)];
+  if (telefone) {
+    const rawTel = telefone.replace(/\D/g, '');
+    const telE164 = rawTel.startsWith('55') ? rawTel : `55${rawTel}`;
+    userData.ph = [hash(telE164)];
+  }
   if (ip) userData.client_ip_address = ip;
   if (userAgent) userData.client_user_agent = userAgent;
 

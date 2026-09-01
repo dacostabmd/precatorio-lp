@@ -7,6 +7,7 @@ import { UtmParams } from '@/lib/utms';
 interface LeadPayload {
   nomeCompleto: string;
   cpf: string;
+  telefone?: string;
   persona: Persona;
   infoSimples?: ResultadoConsultaInfoSimples;
   utms?: UtmParams;
@@ -27,6 +28,17 @@ function isValidCpf(value: string): boolean {
   };
 
   return calcCheckDigit(9) === parseInt(cpf[9], 10) && calcCheckDigit(10) === parseInt(cpf[10], 10);
+}
+
+// Validação de Telefone / Celular brasileiro (DDD + 8 ou 9 dígitos).
+function isValidTelefone(value: string): boolean {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length !== 10 && digits.length !== 11) return false;
+  if (/^(\d)\1+$/.test(digits)) return false;
+  const ddd = parseInt(digits.slice(0, 2), 10);
+  if (ddd < 11 || ddd > 99) return false;
+  if (digits.length === 11 && digits[2] !== '9') return false;
+  return true;
 }
 
 // Pipeline (categoria) de Deal "[LP] PREMIUM OFFICE v2" no Bitrix — funil
@@ -175,6 +187,7 @@ async function enviarLeadParaBitrix(payload: LeadPayload) {
   let infoTribunaisTexto = '=== CONSULTA AUTOMÁTICA DE PRECATÓRIOS (INFOSIMPLES) ===\n';
   infoTribunaisTexto += `👤 Nome: ${payload.nomeCompleto}\n`;
   infoTribunaisTexto += `🪪 CPF: ${payload.cpf}\n`;
+  if (payload.telefone) infoTribunaisTexto += `📱 Telefone / WhatsApp: ${payload.telefone}\n`;
   infoTribunaisTexto += `🏢 Perfil: ${personaLabel[payload.persona] || payload.persona}\n\n`;
 
   let processoPrincipalNum = '';
@@ -315,7 +328,7 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
     if (payload.utms.referrer) infoTribunaisTexto += `• Referrer: ${payload.utms.referrer}\n`;
   }
 
-  // 1. Cria ou Atualiza Contato com todos os campos de CPF e UTMs
+  // 1. Cria ou Atualiza Contato com todos os campos de CPF, Telefone e UTMs
   const contactFields: Record<string, any> = {
     NAME: payload.nomeCompleto,
     [BITRIX_CONTACT_UF_CPF]: [payload.cpf],
@@ -324,6 +337,10 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
     COMMENTS: infoTribunaisTexto,
     SOURCE_ID: 'WEB',
   };
+
+  if (payload.telefone) {
+    contactFields.PHONE = [{ VALUE: payload.telefone, VALUE_TYPE: 'WORK' }];
+  }
 
   if (payload.utms?.utm_source) contactFields.UTM_SOURCE = payload.utms.utm_source;
   if (payload.utms?.utm_medium) contactFields.UTM_MEDIUM = payload.utms.utm_medium;
@@ -335,14 +352,18 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
     fields: contactFields,
   });
 
-  // Título dinâmico que já mostra o tribunal e o CPF na capa do card
+  // Título dinâmico que já mostra o tribunal, CPF e WhatsApp na capa do card
   let dealTitle = `${payload.nomeCompleto}`;
   if (tribunalDestaque) {
     dealTitle += ` - Precatório ${tribunalDestaque}`;
   } else {
     dealTitle += ` - LP Calculadora`;
   }
-  dealTitle += ` (${payload.cpf})`;
+  dealTitle += ` (${payload.cpf}`;
+  if (payload.telefone) {
+    dealTitle += ` · ${payload.telefone}`;
+  }
+  dealTitle += `)`;
 
   // 2. Cria o Negócio (Deal) preenchendo todos os campos customizados
   const dealFields: Record<string, any> = {
@@ -406,13 +427,16 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
 
 export async function POST(request: Request) {
   try {
-    const { nomeCompleto, cpf, persona, utms } = await request.json();
+    const { nomeCompleto, cpf, telefone, persona, utms } = await request.json();
 
     if (!nomeCompleto || typeof nomeCompleto !== 'string' || nomeCompleto.trim().length < 3) {
       return NextResponse.json({ error: 'Nome completo inválido.' }, { status: 400 });
     }
     if (!cpf || typeof cpf !== 'string' || !isValidCpf(cpf)) {
       return NextResponse.json({ error: 'CPF inválido.' }, { status: 400 });
+    }
+    if (!telefone || typeof telefone !== 'string' || !isValidTelefone(telefone)) {
+      return NextResponse.json({ error: 'Número de WhatsApp / Telefone inválido com DDD.' }, { status: 400 });
     }
 
     const cpfDigitos = cpf.replace(/\D/g, '');
@@ -428,6 +452,7 @@ export async function POST(request: Request) {
     const resultado = await enviarLeadParaBitrix({
       nomeCompleto: nomeCompleto.trim(),
       cpf: cpf.trim(),
+      telefone: telefone.trim(),
       persona: (persona as Persona) || 'autor',
       infoSimples: infoSimplesResult,
       utms: (utms as UtmParams) || undefined,
@@ -444,6 +469,7 @@ export async function POST(request: Request) {
       await enviarLeadParaMeta({
         nomeCompleto: nomeCompleto.trim(),
         cpf: cpf.trim(),
+        telefone: telefone.trim(),
         eventId: `bitrix-deal-${resultado.leadId}`,
         eventName: 'AIChatLead',
         ip,
@@ -470,4 +496,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
 

@@ -9,6 +9,7 @@ interface DevApiModalProps {
   apiData: ResultadoConsultaInfoSimples | null;
   leadNome?: string;
   leadCpf?: string;
+  leadTelefone?: string;
   bitrixDealId?: number | null;
 }
 
@@ -18,6 +19,7 @@ export default function DevApiModal({
   apiData,
   leadNome,
   leadCpf,
+  leadTelefone,
   bitrixDealId,
 }: DevApiModalProps) {
   const [activeTab, setActiveTab] = useState<'resumo' | 'processos' | 'tribunais' | 'raw'>('resumo');
@@ -138,6 +140,12 @@ export default function DevApiModal({
             <span style={{ color: '#64748B' }}>CPF: </span>
             <strong style={{ color: '#38BDF8', fontFamily: 'monospace' }}>{leadCpf || apiData?.cpf || '–'}</strong>
           </div>
+          {leadTelefone && (
+            <div>
+              <span style={{ color: '#64748B' }}>WhatsApp / Tel: </span>
+              <strong style={{ color: '#A78BFA', fontFamily: 'monospace' }}>{leadTelefone}</strong>
+            </div>
+          )}
           {bitrixDealId && (
             <div>
               <span style={{ color: '#64748B' }}>Bitrix Deal: </span>

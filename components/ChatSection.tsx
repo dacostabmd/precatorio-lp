@@ -66,6 +66,17 @@ function isValidCpf(value: string): boolean {
   return calcCheckDigit(9) === parseInt(cpf[9], 10) && calcCheckDigit(10) === parseInt(cpf[10], 10);
 }
 
+// Validação de Telefone / Celular brasileiro (DDD + 8 ou 9 dígitos).
+function isValidTelefone(value: string): boolean {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length !== 10 && digits.length !== 11) return false;
+  if (/^(\d)\1+$/.test(digits)) return false;
+  const ddd = parseInt(digits.slice(0, 2), 10);
+  if (ddd < 11 || ddd > 99) return false;
+  if (digits.length === 11 && digits[2] !== '9') return false;
+  return true;
+}
+
 // Rótulos exibidos no card de "processando" enquanto a API responde — puramente
 // cosméticos (não refletem chamadas reais além da requisição única ao /api/chat),
 // mas dão ao usuário a sensação de progresso real durante a espera.
@@ -177,6 +188,7 @@ interface State {
   persona: Persona;
   leadNome: string;
   leadCpf: string;
+  leadTelefone: string;
   leadSubmitting: boolean;
   leadError: string | null;
   bitrixDealId: number | null;
@@ -231,6 +243,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     persona: 'autor',
     leadNome: '',
     leadCpf: '',
+    leadTelefone: '',
     leadSubmitting: false,
     leadError: null,
     bitrixDealId: null,
@@ -402,7 +415,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
 
     this.pushMessages(
       userText(label, true),
-      aiText('Perfeito! Para liberar sua calculadora personalizada, preciso só do seu nome completo e do seu CPF.')
+      aiText('Perfeito! Para liberar sua calculadora personalizada, informe seu nome completo, CPF e WhatsApp/telefone para contato.')
     );
     this.setState({ stage: 'lead', persona: p });
   };
@@ -629,10 +642,28 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     this.setState({ leadCpf: formatted, leadError: null });
   };
 
+  onLeadTelefoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+    let formatted = digits;
+    if (digits.length > 0) {
+      if (digits.length <= 2) {
+        formatted = `(${digits}`;
+      } else if (digits.length <= 6) {
+        formatted = `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+      } else if (digits.length <= 10) {
+        formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+      } else {
+        formatted = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
+      }
+    }
+    this.setState({ leadTelefone: formatted, leadError: null });
+  };
+
   onLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const nomeCompleto = this.state.leadNome.trim();
     const cpf = this.state.leadCpf.trim();
+    const telefone = this.state.leadTelefone.trim();
 
     if (nomeCompleto.length < 3) {
       this.setState({ leadError: 'Informe seu nome completo.' });
@@ -642,12 +673,16 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
       this.setState({ leadError: 'Informe um CPF válido.' });
       return;
     }
+    if (!isValidTelefone(telefone)) {
+      this.setState({ leadError: 'Informe um número de WhatsApp ou telefone válido com DDD.' });
+      return;
+    }
 
     const primeiroNome = nomeCompleto.split(' ')[0] || nomeCompleto;
 
     // 1. Resposta imediata na tela (0ms) — sem esperar a requisição de tribunais!
     this.pushMessages(
-      userText(`${nomeCompleto} · ${cpf}`, true),
+      userText(`${nomeCompleto} · ${cpf} · ${telefone}`, true),
       aiText(
         `Obrigado, ${primeiroNome}! Agora envie o arquivo do ofício (PDF ou imagem) para analisarmos os dados e calcularmos a sua proposta personalizada.\n\nSe tiver qualquer dúvida sobre o seu precatório, regras de cálculo, prazos ou deságio, pode me perguntar aqui embaixo!`
       )
@@ -664,7 +699,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     fetch('/api/lead', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nomeCompleto, cpf, persona: this.state.persona, utms }),
+      body: JSON.stringify({ nomeCompleto, cpf, telefone, persona: this.state.persona, utms }),
     })
       .then((res) => res.json())
       .then((data) => {
@@ -1411,10 +1446,16 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
       );
     }
     if (stage === 'lead') {
-      const { leadNome, leadCpf, leadSubmitting, leadError } = this.state;
+      const { leadNome, leadCpf, leadTelefone, leadSubmitting, leadError } = this.state;
       const cpfDigits = leadCpf.replace(/\D/g, '');
       const cpfInvalido = cpfDigits.length === 11 && !isValidCpf(leadCpf);
-      const podeEnviar = leadNome.trim().length >= 3 && isValidCpf(leadCpf) && !leadSubmitting;
+      const telDigits = leadTelefone.replace(/\D/g, '');
+      const telInvalido = (telDigits.length === 10 || telDigits.length === 11) && !isValidTelefone(leadTelefone);
+      const podeEnviar =
+        leadNome.trim().length >= 3 &&
+        isValidCpf(leadCpf) &&
+        isValidTelefone(leadTelefone) &&
+        !leadSubmitting;
       return (
         <form
           onSubmit={this.onLeadSubmit}
@@ -1467,6 +1508,34 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           {cpfInvalido && !leadError && (
             <div style={{ width: '100%', maxWidth: '360px', fontSize: '12px', color: '#C4392B', fontWeight: 600, textAlign: 'center' }}>
               CPF inválido. Confira os números digitados.
+            </div>
+          )}
+          <input
+            type="tel"
+            inputMode="tel"
+            value={leadTelefone}
+            onChange={this.onLeadTelefoneChange}
+            placeholder="WhatsApp / Telefone (ex: 11 99999-9999)"
+            autoComplete="tel"
+            disabled={leadSubmitting}
+            aria-invalid={telInvalido}
+            style={{
+              width: '100%',
+              maxWidth: '360px',
+              border: `1.5px solid ${telInvalido ? '#C4392B' : '#DDE2EA'}`,
+              borderRadius: '10px',
+              padding: '11px 14px',
+              fontSize: '13px',
+              fontFamily: 'inherit',
+              color: '#1C2331',
+              background: '#fff',
+              outline: 'none',
+              textAlign: 'center',
+            }}
+          />
+          {telInvalido && !leadError && (
+            <div style={{ width: '100%', maxWidth: '360px', fontSize: '12px', color: '#C4392B', fontWeight: 600, textAlign: 'center' }}>
+              Número de WhatsApp inválido. Informe DDD + número.
             </div>
           )}
           {leadError && (
@@ -2029,6 +2098,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           apiData={this.state.apiExtractedData}
           leadNome={this.state.leadNome}
           leadCpf={this.state.leadCpf}
+          leadTelefone={this.state.leadTelefone}
           bitrixDealId={this.state.bitrixDealId}
         />
 
