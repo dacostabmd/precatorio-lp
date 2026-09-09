@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { Persona } from '@/lib/calculator';
 import { enviarLeadParaMeta } from '@/lib/metaConversionsApi';
 import { consultarCpfInfoSimples, ResultadoConsultaInfoSimples } from '@/lib/infosimples';
 import { UtmParams } from '@/lib/utms';
+import { upsertChatSession, logIntegrationEvent } from '@/lib/observability';
 
 interface LeadPayload {
   nomeCompleto: string;
@@ -427,7 +428,7 @@ A consulta automática de tribunais não pôde ser executada no momento do cadas
 
 export async function POST(request: Request) {
   try {
-    const { nomeCompleto, cpf, telefone, persona, utms } = await request.json();
+    const { nomeCompleto, cpf, telefone, persona, utms, sessionId, source } = await request.json();
 
     if (!nomeCompleto || typeof nomeCompleto !== 'string' || nomeCompleto.trim().length < 3) {
       return NextResponse.json({ error: 'Nome completo inválido.' }, { status: 400 });
@@ -443,12 +444,33 @@ export async function POST(request: Request) {
 
     // Consulta InfoSimples por CPF em paralelo com os tribunais
     let infoSimplesResult: ResultadoConsultaInfoSimples | undefined;
+    const infoSimplesStart = Date.now();
     try {
       infoSimplesResult = await consultarCpfInfoSimples(cpfDigitos);
-    } catch (apiErr) {
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'infosimples',
+          operation: 'consulta_cpf',
+          status: 'success',
+          latencyMs: Date.now() - infoSimplesStart,
+        })
+      );
+    } catch (apiErr: any) {
       console.error('[lead-api] Erro ao consultar InfoSimples:', apiErr);
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'infosimples',
+          operation: 'consulta_cpf',
+          status: 'error',
+          latencyMs: Date.now() - infoSimplesStart,
+          errorMessage: apiErr?.message,
+        })
+      );
     }
 
+    const bitrixStart = Date.now();
     const resultado = await enviarLeadParaBitrix({
       nomeCompleto: nomeCompleto.trim(),
       cpf: cpf.trim(),
@@ -458,6 +480,17 @@ export async function POST(request: Request) {
       utms: (utms as UtmParams) || undefined,
     });
 
+    after(() =>
+      logIntegrationEvent({
+        clientSessionId: sessionId,
+        service: 'bitrix',
+        operation: 'lead.create',
+        status: resultado.enviado ? 'success' : 'error',
+        latencyMs: Date.now() - bitrixStart,
+        errorMessage: resultado.enviado ? undefined : 'BITRIX_WEBHOOK_URL não configurada',
+      })
+    );
+
     // Card criado no Bitrix com sucesso -> dispara o evento "AIChatLead" e "Lead" para a Meta Conversions API
     if (resultado.enviado && resultado.leadId) {
       const ip =
@@ -466,6 +499,7 @@ export async function POST(request: Request) {
         undefined;
       const userAgent = request.headers.get('user-agent') || undefined;
 
+      const metaStart = Date.now();
       await enviarLeadParaMeta({
         nomeCompleto: nomeCompleto.trim(),
         cpf: cpf.trim(),
@@ -478,10 +512,52 @@ export async function POST(request: Request) {
           bitrixDealId: resultado.leadId,
           persona: persona || 'autor',
         },
-      }).catch((error) => {
-        console.error('Erro ao enviar evento AIChatLead para a Meta Conversions API:', error);
-      });
+      })
+        .then(() => {
+          after(() =>
+            logIntegrationEvent({
+              clientSessionId: sessionId,
+              service: 'meta_capi',
+              operation: 'AIChatLead',
+              status: 'success',
+              latencyMs: Date.now() - metaStart,
+            })
+          );
+        })
+        .catch((error) => {
+          console.error('Erro ao enviar evento AIChatLead para a Meta Conversions API:', error);
+          after(() =>
+            logIntegrationEvent({
+              clientSessionId: sessionId,
+              service: 'meta_capi',
+              operation: 'AIChatLead',
+              status: 'error',
+              latencyMs: Date.now() - metaStart,
+              errorMessage: error?.message,
+            })
+          );
+        });
     }
+
+    after(() =>
+      upsertChatSession(sessionId, {
+        source: source === 'home' ? 'home' : source === 'embed' ? 'embed' : 'unknown',
+        persona: persona || 'autor',
+        bitrix_deal_id: resultado.leadId ?? null,
+        bitrix_contact_id: (resultado as any).contactId ?? null,
+        lead_nome: nomeCompleto.trim(),
+        lead_cpf: cpf.trim(),
+        lead_telefone: telefone.trim(),
+        utm_source: (utms as UtmParams)?.utm_source,
+        utm_medium: (utms as UtmParams)?.utm_medium,
+        utm_campaign: (utms as UtmParams)?.utm_campaign,
+        utm_content: (utms as UtmParams)?.utm_content,
+        utm_term: (utms as UtmParams)?.utm_term,
+        referrer: (utms as UtmParams)?.referrer,
+        resultado: resultado.enviado ? 'lead_qualificado' : 'em_andamento',
+        stage_final: 'lead',
+      })
+    );
 
     return NextResponse.json({
       ok: true,

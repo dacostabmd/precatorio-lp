@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
+import { upsertChatSession, logIntegrationEvent } from '@/lib/observability';
 
 interface UpdatePayload {
   dealId: number;
@@ -12,7 +13,16 @@ interface UpdatePayload {
   };
   horarioReuniao?: string;
   honorarios?: string;
+  sessionId?: string;
 }
+
+const RESULTADO_POR_ACAO: Record<UpdatePayload['acao'], string> = {
+  simulacao_calculada: 'lead_qualificado',
+  agendou_reuniao: 'reuniao_agendada',
+  falar_consultor: 'falou_consultor',
+  solicitar_revisao: 'revisao_solicitada',
+  aceitou_proposta: 'documentos_enviados',
+};
 
 async function bitrixCall(webhookUrl: string, method: string, payload: object) {
   const res = await fetch(`${webhookUrl.replace(/\/$/, '')}/${method}.json`, {
@@ -30,7 +40,7 @@ async function bitrixCall(webhookUrl: string, method: string, payload: object) {
 export async function POST(request: Request) {
   try {
     const body: UpdatePayload = await request.json();
-    const { dealId, acao, simulacao, horarioReuniao, honorarios } = body;
+    const { dealId, acao, simulacao, horarioReuniao, honorarios, sessionId } = body;
 
     if (!dealId || typeof dealId !== 'number') {
       return NextResponse.json({ error: 'dealId é obrigatório.' }, { status: 400 });
@@ -40,6 +50,8 @@ export async function POST(request: Request) {
     if (!webhookUrl) {
       return NextResponse.json({ ok: false, message: 'Webhook não configurado' });
     }
+
+    const bitrixStart = Date.now();
 
     // 1. Busca dados atuais do Deal para concatenar nos comentários
     const dealAtual = await bitrixCall(webhookUrl, 'crm.deal.get', { id: dealId }).catch(() => null);
@@ -86,9 +98,33 @@ export async function POST(request: Request) {
       fields: updateFields,
     });
 
+    after(() =>
+      logIntegrationEvent({
+        clientSessionId: sessionId,
+        service: 'bitrix',
+        operation: `deal.update.${acao}`,
+        status: 'success',
+        latencyMs: Date.now() - bitrixStart,
+      })
+    );
+    after(() =>
+      upsertChatSession(sessionId, {
+        resultado: RESULTADO_POR_ACAO[acao] || 'em_andamento',
+        stage_final: acao,
+      })
+    );
+
     return NextResponse.json({ ok: true });
   } catch (error: any) {
     console.error('Erro na rota /api/lead/update (Bitrix):', error);
+    after(() =>
+      logIntegrationEvent({
+        service: 'bitrix',
+        operation: 'deal.update',
+        status: 'error',
+        errorMessage: error?.message,
+      })
+    );
     return NextResponse.json(
       { error: 'Falha ao atualizar o lead no Bitrix.', details: error.message },
       { status: 500 }

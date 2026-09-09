@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { validarArquivoUpload, sanitizarNomeArquivo } from '@/lib/upload';
+import { upsertChatSession, logIntegrationEvent } from '@/lib/observability';
 
 const MAX_ARQUIVOS_POR_ENVIO = 8;
 
@@ -51,7 +52,11 @@ async function publicarDocumentosNoBitrix(
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { bitrixDealId, arquivos } = body as { bitrixDealId?: number; arquivos?: ArquivoRecebido[] };
+    const { bitrixDealId, arquivos, sessionId } = body as {
+      bitrixDealId?: number;
+      arquivos?: ArquivoRecebido[];
+      sessionId?: string;
+    };
 
     if (!Array.isArray(arquivos) || arquivos.length === 0) {
       return NextResponse.json({ error: 'Nenhum documento enviado.' }, { status: 400 });
@@ -91,7 +96,21 @@ export async function POST(request: Request) {
       );
     }
 
+    const bitrixStart = Date.now();
     const publicacao = await publicarDocumentosNoBitrix(bitrixDealId, validos);
+
+    after(() =>
+      logIntegrationEvent({
+        clientSessionId: sessionId,
+        service: 'bitrix',
+        operation: 'timeline.comment.add(documentos)',
+        status: publicacao.ok ? 'success' : 'error',
+        latencyMs: Date.now() - bitrixStart,
+        errorMessage: publicacao.ok ? undefined : publicacao.erro,
+        requestSummary: { arquivosCount: validos.length, fileNames: validos.map((v) => v.fileName) },
+      })
+    );
+
     if (!publicacao.ok) {
       console.error('[bitrix] Falha ao publicar documentos complementares:', publicacao.erro);
       return NextResponse.json(
@@ -99,6 +118,13 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    after(() =>
+      upsertChatSession(sessionId, {
+        resultado: 'documentos_enviados',
+        stage_final: 'documents',
+      })
+    );
 
     return NextResponse.json({ ok: true, enviados: validos.length, rejeitados });
   } catch (error: any) {

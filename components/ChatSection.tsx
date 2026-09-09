@@ -197,6 +197,7 @@ interface State {
   docsError: string | null;
   apiExtractedData: any | null;
   isDevModalOpen: boolean;
+  clientSessionId: string;
 }
 
 function formatColor(colorStr?: string): string | undefined {
@@ -252,6 +253,10 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     docsError: null,
     apiExtractedData: null,
     isDevModalOpen: false,
+    clientSessionId:
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   };
 
   componentDidMount() {
@@ -453,6 +458,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
           mimeType: fileBase64 ? mimeType : undefined,
           fileName: fileLabel,
           bitrixDealId: this.state.bitrixDealId || undefined,
+          sessionId: this.state.clientSessionId,
         }),
       });
 
@@ -699,7 +705,15 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     fetch('/api/lead', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nomeCompleto, cpf, telefone, persona: this.state.persona, utms }),
+      body: JSON.stringify({
+        nomeCompleto,
+        cpf,
+        telefone,
+        persona: this.state.persona,
+        utms,
+        sessionId: this.state.clientSessionId,
+        source: this.props.embedOnly ? 'embed' : 'home',
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
@@ -786,7 +800,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
     fetch('/api/lead/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dealId, ...payload }),
+      body: JSON.stringify({ dealId, ...payload, sessionId: this.state.clientSessionId }),
     }).catch((err) => console.warn('[bitrix-update] Erro ao atualizar lead:', err));
   };
 
@@ -892,6 +906,7 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
         body: JSON.stringify({
           bitrixDealId: this.state.bitrixDealId || undefined,
           arquivos: arquivosBase64,
+          sessionId: this.state.clientSessionId,
         }),
       });
 
@@ -1009,6 +1024,8 @@ export default class ChatSection extends React.Component<ChatSectionProps, State
         body: JSON.stringify({
           messages: historyForApi,
           persona: this.state.persona,
+          bitrixDealId: this.state.bitrixDealId || undefined,
+          sessionId: this.state.clientSessionId,
         }),
       });
 

@@ -11,8 +11,8 @@ const montserrat = Montserrat({
 });
 
 export const metadata: Metadata = {
-  title: 'Premium Office Precatório',
-  description: 'Antecipe seu precatório com segurança jurídica, transparência e estratégia.',
+  title: 'Premium Office - Painel do Chatbot',
+  description: 'Hub interno de controle e observabilidade do chatbot de captação de precatórios.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

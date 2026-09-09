@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
 import {
   analisarOficioComLangChain,
@@ -9,6 +9,7 @@ import { Persona } from '@/lib/calculator';
 import { validarArquivoUpload, sanitizarNomeArquivo } from '@/lib/upload';
 import { sanitizarPersona, sanitizarHistoricoChat } from '@/lib/chatSecurity';
 import { consultarRagWebhook } from '@/lib/ragWebhook';
+import { logChatMessage, logIntegrationEvent } from '@/lib/observability';
 
 /**
  * Anexa o arquivo do ofício (base64) ao Negócio (Deal) já criado no Bitrix,
@@ -141,7 +142,7 @@ async function enviarQualificacaoAoBitrix(
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { messages, fileBase64, fileName, bitrixDealId, leadNome, leadCpf } = body;
+    const { messages, fileBase64, fileName, bitrixDealId, leadNome, leadCpf, sessionId } = body;
     const persona = sanitizarPersona(body.persona);
 
     const apiKey = process.env.OPENAI_API_KEY;
@@ -160,16 +161,47 @@ export async function POST(request: Request) {
       }
       const fileNameSeguro = sanitizarNomeArquivo(fileName);
 
+      after(() =>
+        logChatMessage(sessionId, 'user', `Documento enviado: ${fileNameSeguro}`, 'file', {
+          fileName: fileNameSeguro,
+        })
+      );
+
       if (bitrixDealId) {
         anexarArquivoAoLeadBitrix(bitrixDealId, fileNameSeguro, fileBase64);
       }
 
-      const entrada = prepararEntradaDocumento(
-        validacao.buffer,
-        validacao.mimeTypeReal,
-        fileNameSeguro
-      );
-      const analise = await analisarOficioComLangChain(entrada, persona as Persona);
+      const analiseStart = Date.now();
+      let analise;
+      try {
+        const entrada = prepararEntradaDocumento(
+          validacao.buffer,
+          validacao.mimeTypeReal,
+          fileNameSeguro
+        );
+        analise = await analisarOficioComLangChain(entrada, persona as Persona);
+        after(() =>
+          logIntegrationEvent({
+            clientSessionId: sessionId,
+            service: 'openai',
+            operation: 'analise_oficio',
+            status: 'success',
+            latencyMs: Date.now() - analiseStart,
+          })
+        );
+      } catch (analiseErr: any) {
+        after(() =>
+          logIntegrationEvent({
+            clientSessionId: sessionId,
+            service: 'openai',
+            operation: 'analise_oficio',
+            status: 'error',
+            latencyMs: Date.now() - analiseStart,
+            errorMessage: analiseErr?.message,
+          })
+        );
+        throw analiseErr;
+      }
 
       if (bitrixDealId) {
         enviarQualificacaoAoBitrix(
@@ -181,6 +213,8 @@ export async function POST(request: Request) {
           analise.mesesRra
         );
       }
+
+      after(() => logChatMessage(sessionId, 'assistant', analise.respostaFormatada, 'text'));
 
       return NextResponse.json({
         text: analise.respostaFormatada,
@@ -194,8 +228,13 @@ export async function POST(request: Request) {
     }
 
     const historicoSeguro = sanitizarHistoricoChat(messages);
+    const ultimaMensagemUsuario = historicoSeguro[historicoSeguro.length - 1];
+    if (ultimaMensagemUsuario?.content) {
+      after(() => logChatMessage(sessionId, 'user', ultimaMensagemUsuario.content, 'text'));
+    }
 
     // Tenta primeiro a consulta ao Webhook do RAG Semântico/Vetorial (se USE_RAG_WEBHOOK=true)
+    const ragStart = Date.now();
     const respostaRag = await consultarRagWebhook({
       messages: historicoSeguro,
       persona: persona as Persona,
@@ -205,10 +244,33 @@ export async function POST(request: Request) {
     });
 
     if (respostaRag?.text) {
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'rag_webhook',
+          operation: 'chat_completion',
+          status: 'success',
+          latencyMs: Date.now() - ragStart,
+        })
+      );
+      after(() => logChatMessage(sessionId, 'assistant', respostaRag.text, 'text'));
       return NextResponse.json({
         text: respostaRag.text,
         metadata: respostaRag.metadata,
       });
+    }
+
+    if (process.env.USE_RAG_WEBHOOK === 'true') {
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'rag_webhook',
+          operation: 'chat_completion',
+          status: 'error',
+          latencyMs: Date.now() - ragStart,
+          errorMessage: 'RAG webhook não retornou texto - caiu no fallback OpenAI',
+        })
+      );
     }
 
     // Chat Conversacional via LangChain ChatOpenAI (Fallback)
@@ -242,7 +304,34 @@ REGRAS DE SEGURANÇA:
 
     const formattedMessages: any[] = [{ role: 'system', content: systemPrompt }, ...historicoSeguro];
 
-    const response = await llm.invoke(formattedMessages);
+    const openaiStart = Date.now();
+    let response;
+    try {
+      response = await llm.invoke(formattedMessages);
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'openai',
+          operation: 'chat_completion',
+          status: 'success',
+          latencyMs: Date.now() - openaiStart,
+        })
+      );
+    } catch (llmErr: any) {
+      after(() =>
+        logIntegrationEvent({
+          clientSessionId: sessionId,
+          service: 'openai',
+          operation: 'chat_completion',
+          status: 'error',
+          latencyMs: Date.now() - openaiStart,
+          errorMessage: llmErr?.message,
+        })
+      );
+      throw llmErr;
+    }
+
+    after(() => logChatMessage(sessionId, 'assistant', String(response.content), 'text'));
 
     return NextResponse.json({
       text: response.content,
