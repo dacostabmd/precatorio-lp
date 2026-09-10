@@ -1,12 +1,18 @@
 import { getSupabaseAdmin } from './supabaseAdmin';
 
 const OAUTH_AUTHORIZE_PATH = '/oauth/authorize/';
-const OAUTH_TOKEN_URL = 'https://oauth.bitrix.info/oauth/token/';
+const OAUTH_TOKEN_PATH = '/oauth/token/';
 
 function getEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} nao configurado.`);
   return value;
+}
+
+// On-premise: o endpoint de token vive no proprio dominio do portal, nao em oauth.bitrix.info (exclusivo do Bitrix24 Cloud).
+function getOAuthTokenUrl(): string {
+  const domain = getEnv('BITRIX_OAUTH_PORTAL_DOMAIN');
+  return `https://${domain}${OAUTH_TOKEN_PATH}`;
 }
 
 function getRedirectUri(): string {
@@ -46,7 +52,7 @@ export async function exchangeCodeForToken(code: string): Promise<BitrixTokenRes
     code,
   });
 
-  const res = await fetch(`${OAUTH_TOKEN_URL}?${params.toString()}`);
+  const res = await fetch(`${getOAuthTokenUrl()}?${params.toString()}`);
   const data = await res.json();
 
   if (!res.ok || data.error) {
@@ -64,7 +70,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<BitrixTo
     refresh_token: refreshToken,
   });
 
-  const res = await fetch(`${OAUTH_TOKEN_URL}?${params.toString()}`);
+  const res = await fetch(`${getOAuthTokenUrl()}?${params.toString()}`);
   const data = await res.json();
 
   if (!res.ok || data.error) {
