@@ -1,3 +1,5 @@
+'use client';
+
 import { Badge, Group, Paper, Stack, Text } from '@mantine/core';
 import type { ChatMessageRow, IntegrationEventRow } from '@/lib/hubQueries';
 import { SERVICE_LABELS } from '@/lib/hubLabels';

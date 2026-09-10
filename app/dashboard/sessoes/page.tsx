@@ -1,4 +1,3 @@
-import { Title } from '@mantine/core';
 import SessionFilters from '@/components/hub/SessionFilters';
 import SessionsTable from '@/components/hub/SessionsTable';
 import SessionsPagination from '@/components/hub/SessionsPagination';
@@ -31,9 +30,9 @@ export default async function SessoesPage({ searchParams }: PageProps) {
 
   return (
     <div>
-      <Title order={3} mb="md">
+      <h1 className="text-xl font-bold mb-4 text-ink">
         Sessões de chat
-      </Title>
+      </h1>
       <SessionFilters persona={params.persona} resultado={params.resultado} busca={params.busca} />
       <SessionsTable sessions={sessions} />
       <SessionsPagination page={page} totalPages={totalPages} searchParams={params} />

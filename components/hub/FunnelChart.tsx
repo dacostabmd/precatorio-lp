@@ -1,3 +1,5 @@
+'use client';
+
 import { Progress, Stack, Group, Text } from '@mantine/core';
 import { RESULTADO_COLORS, RESULTADO_LABELS } from '@/lib/hubLabels';
 

@@ -1,4 +1,3 @@
-import { Title } from '@mantine/core';
 import IntegrationHealthPanel from '@/components/hub/IntegrationHealthPanel';
 import { getIntegrationsHealth } from '@/lib/hubQueries';
 
@@ -7,9 +6,9 @@ export default async function IntegracoesPage() {
 
   return (
     <div>
-      <Title order={3} mb="md">
+      <h1 className="text-xl font-bold mb-4 text-ink">
         Saúde das integrações
-      </Title>
+      </h1>
       <IntegrationHealthPanel initialData={integrations} />
     </div>
   );

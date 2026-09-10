@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import { Badge, Table } from '@mantine/core';
 import type { ChatSessionRow } from '@/lib/hubQueries';

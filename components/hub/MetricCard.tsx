@@ -1,3 +1,5 @@
+'use client';
+
 import { Paper, Text } from '@mantine/core';
 
 interface MetricCardProps {

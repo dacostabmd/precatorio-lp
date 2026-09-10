@@ -101,6 +101,7 @@ export async function GET(request: NextRequest) {
       httpOnly: true,
       secure: isProd,
       sameSite: isProd ? 'none' : 'lax',
+      partitioned: isProd,
       path: '/',
       maxAge: 60 * 60 * 24 * 7,
     });
@@ -218,6 +219,7 @@ export async function POST(request: NextRequest) {
       httpOnly: true,
       secure: isProd,
       sameSite: isProd ? 'none' : 'lax',
+      partitioned: isProd,
       path: '/',
       maxAge: 60 * 60 * 24 * 7,
     });
